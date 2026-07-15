@@ -26,6 +26,7 @@ class Config:
     jira_site_url: str
     project_key: str
     in_progress_status: str
+    selected_status: str
     default_issue_type: str
 
     @classmethod
@@ -37,6 +38,7 @@ class Config:
             jira_site_url=_require("JIRA_SITE_URL"),
             project_key=_require("JIRA_PROJECT_KEY"),
             in_progress_status=os.environ.get("JIRA_IN_PROGRESS_STATUS", "In Progress"),
+            selected_status=os.environ.get("JIRA_SELECTED_STATUS", "Selected for Development"),
             default_issue_type=os.environ.get("JIRA_DEFAULT_ISSUE_TYPE", "Task"),
         )
 
