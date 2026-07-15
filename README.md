@@ -26,18 +26,29 @@ uv pip install -e .
 
 ## Configuración (variables de entorno)
 
+Crea `~/.jira-gateway.env` (fuera de este repo — la ruta exacta es
+configurable con `JIRA_GATEWAY_ENV_FILE` si quieres otra):
+
 ```bash
-export JIRA_EMAIL="tu-email@dominio.com"
-export JIRA_API_TOKEN="el-token-con-scope-write:jira-work-y-read:jira-work"
-export JIRA_CLOUD_ID="..."           # GET https://tudominio.atlassian.net/_edge/tenant_info
-export JIRA_SITE_URL="https://tudominio.atlassian.net"
-export JIRA_PROJECT_KEY="PROJ"
-export JIRA_IN_PROGRESS_STATUS="In Progress"  # opcional, ajusta al nombre real de tu workflow
-export JIRA_SELECTED_STATUS="Selected for Development"  # opcional, estado al que pasa create_task tras crear
+JIRA_EMAIL=tu-email@dominio.com
+JIRA_API_TOKEN=el-token-con-scope-write:jira-work-y-read:jira-work
+JIRA_CLOUD_ID=...           # GET https://tudominio.atlassian.net/_edge/tenant_info
+JIRA_SITE_URL=https://tudominio.atlassian.net
+JIRA_PROJECT_KEY=PROJ
+JIRA_IN_PROGRESS_STATUS=In Progress  # opcional, ajusta al nombre real de tu workflow
+JIRA_SELECTED_STATUS=Selected for Development  # opcional, estado al que pasa create_task tras crear
+JIRA_DEFAULT_ISSUE_TYPE=Task  # opcional, ajusta al nombre real de tu tipo de issue
 ```
 
-Guarda esto en un `.env` fuera del repo o en tu gestor de secretos habitual —
-nunca en el propio proyecto ni en algo que Claude Code pueda leer o commitear.
+`gateway/config.py` lo carga solo (vía `python-dotenv`) al arrancar —no hace
+falta exportarlo en tu shell ni pasarlo por la config de MCP. Motivo de que
+viva fuera del repo: así no está a la vista dentro del directorio que Claude
+Code tiene abierto mientras curras. No es una barrera de seguridad dura —un
+agente con Bash sin restricciones podría igualmente leer esa ruta si se lo
+propone— pero evita la exposición accidental y evita duplicar el token en
+`~/.claude.json` al configurar el MCP. Si quieres una barrera más fuerte
+(un usuario Unix separado que de verdad no pueda leer el token), usa el
+modo servicio de la sección de abajo.
 
 ## Añadirlo a Claude Code
 
@@ -50,24 +61,23 @@ de que el agente no necesite tocar el token para hacer su trabajo normal.
 
 ### Opción A — stdio (rápida, sin aislamiento real de credenciales)
 
+Como `~/.jira-gateway.env` ya lo carga el propio `config.py`, aquí no hace
+falta pasar ningún `env` — así el token tampoco queda duplicado dentro de
+`~/.claude.json`:
+
 ```json
 {
   "mcpServers": {
     "jira-gateway": {
       "command": "/ruta/a/jira-git-gateway/.venv/bin/python",
-      "args": ["-m", "gateway.server"],
-      "cwd": "/ruta/a/jira-git-gateway",
-      "env": {
-        "JIRA_EMAIL": "...",
-        "JIRA_API_TOKEN": "...",
-        "JIRA_CLOUD_ID": "...",
-        "JIRA_SITE_URL": "...",
-        "JIRA_PROJECT_KEY": "PROJ"
-      }
+      "args": ["-m", "gateway.server"]
     }
   }
 }
 ```
+
+(No hace falta `cwd`: el paquete queda instalado en modo editable en el
+venv, así que `-m gateway.server` funciona desde cualquier directorio.)
 
 Vale para uso personal en el que confías en que el agente usa las tools
 porque son el camino natural para lo que le pides, no porque no tenga forma

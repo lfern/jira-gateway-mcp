@@ -1,10 +1,24 @@
 """
 Config del gateway. Todo sale de variables de entorno — el agente (Claude Code)
 nunca ve estos valores, solo ve las tools que exponemos en server.py.
+
+Se cargan desde un fichero .env FUERA de este repo (por defecto
+~/.jira-gateway.env, o la ruta en JIRA_GATEWAY_ENV_FILE) a propósito: así el
+token no está sentado en el propio directorio del proyecto que Claude Code
+tiene abierto para trabajar. No es una barrera de seguridad dura (un agente
+con Bash sin restricciones podría igualmente leer esa ruta), pero evita que
+esté a la vista mientras curras en el repo, y permite lanzar el servidor
+como stdio sin tener que meter el token en la config de MCP de Claude Code.
 """
 import base64
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+_ENV_FILE = Path(os.environ.get("JIRA_GATEWAY_ENV_FILE", "~/.jira-gateway.env")).expanduser()
+load_dotenv(_ENV_FILE)  # no-op silencioso si el fichero no existe
 
 
 class ConfigError(Exception):
@@ -14,7 +28,7 @@ class ConfigError(Exception):
 def _require(name: str) -> str:
     val = os.environ.get(name)
     if not val:
-        raise ConfigError(f"falta la variable de entorno {name}")
+        raise ConfigError(f"falta la variable de entorno {name} (¿existe {_ENV_FILE}?)")
     return val
 
 

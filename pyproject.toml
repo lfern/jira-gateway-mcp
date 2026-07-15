@@ -5,6 +5,7 @@ requires-python = ">=3.11"
 dependencies = [
     "mcp[cli]>=1.27,<2",
     "requests>=2.31",
+    "python-dotenv>=1.0",
 ]
 
 [build-system]

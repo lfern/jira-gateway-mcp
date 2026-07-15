@@ -1,6 +1,7 @@
 """Prueba rápida de conectividad con Jira, sin pasar por el protocolo MCP.
 Uso: python scripts/smoke_test.py
-Requiere las variables de entorno de siempre ya exportadas.
+Lee las credenciales de ~/.jira-gateway.env automáticamente (o de
+JIRA_GATEWAY_ENV_FILE si lo has cambiado) — no hace falta exportar nada.
 """
 from gateway.config import Config, ConfigError
 from gateway.jira_client import JiraClient, JiraError
