@@ -45,6 +45,7 @@ class Config:
     in_progress_status: str
     selected_status: str
     default_issue_type: str
+    subtask_issue_type: str
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -57,6 +58,7 @@ class Config:
             in_progress_status=os.environ.get("JIRA_IN_PROGRESS_STATUS", "In Progress"),
             selected_status=os.environ.get("JIRA_SELECTED_STATUS", "Selected for Development"),
             default_issue_type=os.environ.get("JIRA_DEFAULT_ISSUE_TYPE", "Task"),
+            subtask_issue_type=os.environ.get("JIRA_SUBTASK_ISSUE_TYPE", "Subtask"),
         )
 
     @property

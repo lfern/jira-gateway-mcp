@@ -54,17 +54,23 @@ def create_task(
     description: str = "",
     issue_type: str | None = None,
     labels: list[str] | None = None,
+    parent_key: str | None = None,
     confirm: bool = False,
 ) -> dict:
     """Crea una tarea nueva en Jira en el proyecto configurado. Tras crearla
     la mueve automáticamente al estado JIRA_SELECTED_STATUS (por defecto
     'Selected for Development'), así no se queda parada en Backlog.
 
+    Si se pasa `parent_key` (ej. 'PROJ-123'), la tarea se crea como
+    subtarea de ese issue. En ese caso, si no se especifica `issue_type`,
+    se usa JIRA_SUBTASK_ISSUE_TYPE (por defecto 'Subtask') en lugar del
+    tipo por defecto.
+
     IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
     crea nada, solo devuelve una vista previa de lo que se enviaría —
     muéstrasela al usuario tal cual. Solo si el usuario la aprueba,
     vuelve a llamar con confirm=True para crearla de verdad."""
-    resolved_type = issue_type or _cfg.default_issue_type
+    resolved_type = issue_type or (_cfg.subtask_issue_type if parent_key else _cfg.default_issue_type)
     resolved_labels = labels or []
 
     if not confirm:
@@ -75,6 +81,7 @@ def create_task(
             "summary": summary,
             "description": description,
             "labels": resolved_labels,
+            "parent_key": parent_key,
             "status_after_create": _cfg.selected_status,
             "note": (
                 "Nada se ha enviado a Jira todavía. Revisa este preview con "
@@ -85,7 +92,7 @@ def create_task(
         }
 
     try:
-        result = _jira.create_issue(summary, description, resolved_type, resolved_labels)
+        result = _jira.create_issue(summary, description, resolved_type, resolved_labels, parent_key)
     except JiraError as e:
         return {"error": str(e)}
 

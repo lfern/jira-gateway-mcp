@@ -38,6 +38,7 @@ JIRA_PROJECT_KEY=PROJ
 JIRA_IN_PROGRESS_STATUS=In Progress  # opcional, ajusta al nombre real de tu workflow
 JIRA_SELECTED_STATUS=Selected for Development  # opcional, estado al que pasa create_task tras crear
 JIRA_DEFAULT_ISSUE_TYPE=Task  # opcional, ajusta al nombre real de tu tipo de issue
+JIRA_SUBTASK_ISSUE_TYPE=Subtask  # opcional, tipo usado al crear con parent_key sin issue_type explícito
 ```
 
 `gateway/config.py` lo carga solo (vía `python-dotenv`) al arrancar —no hace

@@ -61,7 +61,14 @@ class JiraClient:
                 "Asígnatela en Jira antes de empezarla."
             )
 
-    def create_issue(self, summary: str, description: str, issue_type: str, labels: list[str] | None = None) -> dict:
+    def create_issue(
+        self,
+        summary: str,
+        description: str,
+        issue_type: str,
+        labels: list[str] | None = None,
+        parent_key: str | None = None,
+    ) -> dict:
         """Crea un issue. Requiere que el llamante ya haya confirmado —
         esta función no pregunta nada, solo ejecuta."""
         # La API v3 exige el campo description en formato ADF (Atlassian
@@ -85,6 +92,8 @@ class JiraClient:
                 "labels": labels or [],
             }
         }
+        if parent_key:
+            payload["fields"]["parent"] = {"key": parent_key}
         resp = requests.post(
             f"{self.cfg.jira_api_base}/rest/api/3/issue",
             headers=self._headers(),
