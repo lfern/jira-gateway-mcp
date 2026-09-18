@@ -1,7 +1,8 @@
 # jira-gateway
 
-MCP local que expone 3 acciones al agente: `list_my_tasks`, `create_task`
-(con confirmación obligatoria en dos pasos) y `start_task`. Alcance
+MCP local que expone acciones al agente: `list_my_tasks`,
+`list_unassigned_tasks`, `list_task_comments`, `create_task` y `add_comment`
+(ambas con confirmación obligatoria en dos pasos), y `start_task`. Alcance
 deliberadamente reducido a Jira — git (rama, commits, push, historial) lo
 sigue manejando Claude Code directamente por bash, como ya hacías. Este
 gateway no intenta ser una barrera para git; solo cubre lo que el agente no
@@ -26,7 +27,7 @@ uv pip install -e .
 
 ## Configuración (variables de entorno)
 
-Crea `~/.jira-gateway.env` (fuera de este repo — la ruta exacta es
+Crea `~/.secrets/jira-gateway.env` (fuera de este repo — la ruta exacta es
 configurable con `JIRA_GATEWAY_ENV_FILE` si quieres otra):
 
 ```bash
@@ -62,9 +63,9 @@ de que el agente no necesite tocar el token para hacer su trabajo normal.
 
 ### Opción A — stdio (rápida, sin aislamiento real de credenciales)
 
-Como `~/.jira-gateway.env` ya lo carga el propio `config.py`, aquí no hace
-falta pasar ningún `env` — así el token tampoco queda duplicado dentro de
-`~/.claude.json`:
+Como `~/.secrets/jira-gateway.env` ya lo carga el propio `config.py`, aquí
+no hace falta pasar ningún `env` — así el token tampoco queda duplicado
+dentro de `~/.claude.json`:
 
 ```json
 {
@@ -86,18 +87,49 @@ de saltárselas.
 
 ### Opción B — servicio systemd bajo usuario separado (aislamiento real)
 
-`scripts/setup_service.sh` despliega el gateway bajo un usuario Unix
-dedicado (`jira-gw`, sin login), con el `.env` en `/opt/jira-gateway/.env`
-(modo `600`, propiedad de `jira-gw`) — tu usuario normal no puede leerlo ni
-por `cat` ni por ninguna otra vía, porque no tiene permisos de sistema
-sobre esos ficheros. El gateway corre como servicio (`streamable-http`) y
-Claude Code se conecta por red, sin ver el token en ningún momento:
+`scripts/setup_service.sh <empresa>` despliega el gateway bajo un usuario
+Unix dedicado (`jira-gw-<empresa>`, sin login), con el `.env` en
+`/opt/jira-gateway-<empresa>/.env` (modo `600`, propiedad de ese usuario) —
+tu usuario normal no puede leerlo ni por `cat` ni por ninguna otra vía,
+porque no tiene permisos de sistema sobre esos ficheros. El gateway corre
+como servicio (`streamable-http`) y Claude Code se conecta por red, sin ver
+el token en ningún momento.
+
+Se despliega con un solo comando:
 
 ```bash
-sudo bash scripts/setup_service.sh
+sudo bash scripts/setup_service.sh acme
 ```
 
-Y en la config de Claude Code, sin credenciales:
+Crea el usuario `jira-gw-acme`, `/opt/jira-gateway-acme`, y si el `.env` de
+ahí dentro no existe todavía, lo crea vacío (permisos `600`, propiedad de
+`jira-gw-acme`) con las mismas claves que la sección
+[Configuración](#configuración-variables-de-entorno) de arriba. En la misma
+pasada instala dependencias y crea la unidad systemd. Al final te avisa si
+quedan credenciales por rellenar; edítalas con:
+
+```bash
+sudo -u jira-gw-acme nano /opt/jira-gateway-acme/.env
+```
+
+El servicio no arrancará hasta que estén todas rellenas (`config.py` falla
+con un error claro si falta alguna).
+
+Soporta varias empresas en la misma máquina (una unidad systemd por
+empresa), pero **todas escuchan en el mismo puerto fijo** (`8765` por
+defecto) y **nunca hay dos activas a la vez** — un puerto local sin
+autenticación es alcanzable por cualquier proceso de la máquina, así que
+tener dos empresas escuchando en paralelo abriría la puerta a que un agente
+trabajando en el proyecto de una empresa hablara con el gateway de otra.
+Para alternar entre empresas:
+
+```bash
+sudo bash scripts/jira-switch.sh acme       # para el resto, activa "acme"
+bash scripts/jira-switch.sh                 # lista qué instancia está activa (no necesita sudo)
+```
+
+Como el puerto nunca cambia, la config de Claude Code tampoco — es la misma
+entrada pase lo que pase con qué empresa esté activa:
 
 ```json
 {
@@ -111,9 +143,43 @@ Y en la config de Claude Code, sin credenciales:
 ```
 
 Es más montaje (usuario de sistema, systemd, redeploy con el script cuando
-cambies código), pero es la única de las dos opciones donde "el agente no
-puede leer el token" es una garantía técnica y no solo una expectativa de
+cambies código, acordarte de `jira-switch` al cambiar de cliente), pero es
+la única opción donde "el agente no puede leer el token, ni el de esta
+empresa ni el de otra" es una garantía técnica y no solo una expectativa de
 buen comportamiento.
+
+Ambos scripts aceptan `--help`/`-h` si necesitas recordar el uso sin abrir
+este README:
+
+```bash
+bash scripts/setup_service.sh --help
+bash scripts/jira-switch.sh --help
+```
+
+### Crear una instalación nueva
+
+```bash
+sudo bash scripts/setup_service.sh <empresa>
+sudo -u jira-gw-<empresa> nano /opt/jira-gateway-<empresa>/.env   # rellena credenciales
+sudo bash scripts/jira-switch.sh <empresa>                        # la activa (para el resto)
+```
+
+### Actualizar una instalación existente (tras cambiar código del repo)
+
+`setup_service.sh` es idempotente: re-publica el código (`rsync`), reinstala
+dependencias y regenera la unidad systemd, pero **no reinicia el servicio a
+propósito** (para no reiniciar en caliente una instancia que no es la que
+estás tocando). Para que el proceso ya corriendo recoja el código nuevo:
+
+```bash
+sudo bash scripts/setup_service.sh <empresa>
+sudo systemctl restart jira-gateway-<empresa>.service
+```
+
+Solo hace falta el `restart` si `<empresa>` es la instancia activa ahora
+mismo (compruébalo con `bash scripts/jira-switch.sh`, sin sudo); si no está
+activa, el redeploy ya deja el código listo para la próxima vez que la
+actives con `jira-switch.sh`.
 
 ## Flujo de uso
 
@@ -128,11 +194,16 @@ buen comportamiento.
    intermedia de tu workflow).
 4. "Empieza la PROJ-123" → `start_task` sin `status` → transiciona al estado
    de "en progreso" configurado en `JIRA_IN_PROGRESS_STATUS`.
-5. Claude Code crea la rama, desarrolla, comitea y hace push con sus
+5. "¿Qué comentarios tiene la PROJ-123?" → `list_task_comments` (solo
+   lectura, autor/fecha/texto en orden cronológico).
+6. "Comenta en la PROJ-123 que..." → `add_comment` (sin `confirm`) → el
+   agente te enseña el preview del texto → si dices que sí, vuelve a llamar
+   con `confirm=True` para publicarlo.
+7. Claude Code crea la rama, desarrolla, comitea y hace push con sus
    herramientas normales de bash/git — el gateway no interviene en nada de
    esto, y puede seguir leyendo `git log`/`git diff`/`git blame` sin
    restricción alguna.
-5. Tú abres el PR a mano cuando toque.
+8. Tú abres el PR a mano cuando toque.
 
 Nota sobre la confirmación: además del preview de `create_task`, Claude Code
 ya te pide aprobación antes de ejecutar cualquier llamada a un MCP no

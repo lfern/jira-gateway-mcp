@@ -49,6 +49,16 @@ def list_my_tasks() -> list[dict]:
 
 
 @mcp.tool()
+def list_unassigned_tasks() -> list[dict]:
+    """Lista las tareas sin asignar y no cerradas en el proyecto configurado.
+    Solo lectura. No acepta JQL ni parámetros: el filtro está fijado."""
+    try:
+        return _jira.list_unassigned_tasks()
+    except JiraError as e:
+        return [{"error": str(e)}]
+
+
+@mcp.tool()
 def create_task(
     summary: str,
     description: str = "",
@@ -130,6 +140,44 @@ def start_task(issue_key: str, status: str | None = None) -> dict:
         return {"issue_key": issue_key, "status": resolved_status}
     except JiraError as e:
         return {"error": str(e)}
+
+
+@mcp.tool()
+def list_task_comments(issue_key: str) -> list[dict]:
+    """Lista los comentarios de un issue (autor, fecha, texto), en orden
+    cronológico. Solo lectura."""
+    try:
+        return _jira.get_comments(issue_key)
+    except JiraError as e:
+        return [{"error": str(e)}]
+
+
+@mcp.tool()
+def add_comment(issue_key: str, body: str, confirm: bool = False) -> dict:
+    """Añade un comentario a un issue de Jira.
+
+    IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
+    envía nada, solo devuelve una vista previa del comentario — muéstrasela
+    al usuario tal cual. Solo si el usuario la aprueba, vuelve a llamar con
+    confirm=True y los mismos datos para publicarlo de verdad."""
+    if not confirm:
+        return {
+            "preview": True,
+            "issue_key": issue_key,
+            "body": body,
+            "note": (
+                "Nada se ha enviado a Jira todavía. Revisa este preview con "
+                "el usuario y, si lo aprueba, llama de nuevo con confirm=True "
+                "y los mismos datos."
+            ),
+        }
+
+    try:
+        result = _jira.add_comment(issue_key, body)
+    except JiraError as e:
+        return {"error": str(e)}
+
+    return {"created": True, "issue_key": issue_key, **result}
 
 
 if __name__ == "__main__":

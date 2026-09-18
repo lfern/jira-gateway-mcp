@@ -22,6 +22,35 @@ def validate_issue_key(key: str, expected_project: str) -> None:
         raise JiraError(f"{key} no pertenece al proyecto {expected_project}")
 
 
+def _text_to_adf(text: str) -> dict:
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {
+                "type": "paragraph",
+                "content": [{"type": "text", "text": text}] if text else [],
+            }
+        ],
+    }
+
+
+def _adf_to_text(node: dict) -> str:
+    """Extrae texto plano de un documento ADF. Suficiente para mostrar
+    comentarios al agente; no intenta preservar formato (listas, menciones,
+    enlaces, etc. se aplanan a su texto)."""
+    if node.get("type") == "text":
+        return node.get("text", "")
+    if node.get("type") == "mention":
+        return node.get("attrs", {}).get("text", "")
+
+    parts = [_adf_to_text(child) for child in node.get("content", [])]
+    text = "".join(parts)
+    if node.get("type") == "paragraph":
+        text += "\n"
+    return text
+
+
 class JiraClient:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -71,23 +100,11 @@ class JiraClient:
     ) -> dict:
         """Crea un issue. Requiere que el llamante ya haya confirmado —
         esta función no pregunta nada, solo ejecuta."""
-        # La API v3 exige el campo description en formato ADF (Atlassian
-        # Document Format), no texto plano.
-        adf_description = {
-            "type": "doc",
-            "version": 1,
-            "content": [
-                {
-                    "type": "paragraph",
-                    "content": [{"type": "text", "text": description}] if description else [],
-                }
-            ],
-        }
         payload = {
             "fields": {
                 "project": {"key": self.cfg.project_key},
                 "summary": summary,
-                "description": adf_description,
+                "description": _text_to_adf(description),
                 "issuetype": {"name": issue_type},
                 "labels": labels or [],
             }
@@ -111,6 +128,31 @@ class JiraClient:
         """Única query permitida: mis tareas abiertas en el proyecto configurado."""
         jql = (
             f"project = {self.cfg.project_key} AND assignee = currentUser() "
+            "AND statusCategory != Done ORDER BY updated DESC"
+        )
+        resp = requests.get(
+            f"{self.cfg.jira_api_base}/rest/api/3/search/jql",
+            headers=self._headers(),
+            params={"jql": jql, "fields": "summary,status"},
+            timeout=15,
+        )
+        if not resp.ok:
+            raise JiraError(f"Jira {resp.status_code}: {resp.text}")
+
+        issues = resp.json().get("issues", [])
+        return [
+            {
+                "key": i["key"],
+                "summary": i["fields"]["summary"],
+                "status": i["fields"]["status"]["name"],
+            }
+            for i in issues
+        ]
+
+    def list_unassigned_tasks(self) -> list[dict]:
+        """Única query permitida: tareas sin asignar y abiertas en el proyecto configurado."""
+        jql = (
+            f"project = {self.cfg.project_key} AND assignee IS EMPTY "
             "AND statusCategory != Done ORDER BY updated DESC"
         )
         resp = requests.get(
@@ -164,3 +206,45 @@ class JiraClient:
         )
         if not resp.ok:
             raise JiraError(f"fallo al transicionar {issue_key}: {resp.status_code}")
+
+    def get_comments(self, issue_key: str) -> list[dict]:
+        validate_issue_key(issue_key, self.cfg.project_key)
+
+        resp = requests.get(
+            f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/comment",
+            headers=self._headers(),
+            params={"orderBy": "created"},
+            timeout=15,
+        )
+        if not resp.ok:
+            raise JiraError(f"no pude leer comentarios de {issue_key}: {resp.status_code}")
+
+        comments = resp.json().get("comments", [])
+        return [
+            {
+                "author": c["author"]["displayName"],
+                "created": c["created"],
+                "body": _adf_to_text(c["body"]).strip(),
+            }
+            for c in comments
+        ]
+
+    def add_comment(self, issue_key: str, body: str) -> dict:
+        """Añade un comentario. Requiere que el llamante ya haya confirmado —
+        esta función no pregunta nada, solo ejecuta."""
+        validate_issue_key(issue_key, self.cfg.project_key)
+
+        resp = requests.post(
+            f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/comment",
+            headers=self._headers(),
+            json={"body": _text_to_adf(body)},
+            timeout=15,
+        )
+        if not resp.ok:
+            raise JiraError(f"Jira {resp.status_code} al comentar {issue_key}: {resp.text}")
+
+        comment = resp.json()
+        return {
+            "id": comment["id"],
+            "url": f"{self.cfg.jira_site_url}/browse/{issue_key}?focusedCommentId={comment['id']}",
+        }
