@@ -20,6 +20,7 @@ def make_config(**overrides) -> Config:
         bitbucket_allowed_repos=("refunder-react", "dividend-refund"),
         bitbucket_default_repo="refunder-react",
         bitbucket_default_target_branch="pre",
+        bitbucket_allowed_pipelines=("sello-version-pre", "sello-version-staging", "sello-version-prod"),
     )
     defaults.update(overrides)
     return Config(**defaults)

@@ -5,12 +5,13 @@ MCP local que expone acciones al agente: `list_my_tasks`,
 (ambas con confirmación obligatoria en dos pasos), y `start_task` para
 Jira; y, si Bitbucket está configurado, `create_pull_request` (también con
 confirmación en dos pasos), `list_open_pull_requests` y `get_pull_request`
-para pull requests de Bitbucket Cloud. Alcance deliberadamente acotado a
-Jira y pull requests de Bitbucket — git (rama, commits, push, historial) lo
-sigue manejando Claude Code directamente por bash, como ya hacías. Este
-gateway no intenta ser una barrera para git; solo cubre lo que el agente no
-puede hacer por sí mismo: hablar con Jira/Bitbucket sin ver tus
-credenciales.
+para pull requests, más `run_pipeline` (confirmación en dos pasos, allowlist
+dura de patrones) y `get_pipeline` para lanzar pipelines custom de
+Bitbucket Cloud. Alcance deliberadamente acotado a Jira y Bitbucket (PRs y
+pipelines custom) — git (rama, commits, push, historial) lo sigue
+manejando Claude Code directamente por bash, como ya hacías. Este gateway
+no intenta ser una barrera para git; solo cubre lo que el agente no puede
+hacer por sí mismo: hablar con Jira/Bitbucket sin ver tus credenciales.
 
 ## Instalación
 
@@ -47,18 +48,23 @@ JIRA_SUBTASK_ISSUE_TYPE=Subtask  # opcional, tipo usado al crear con parent_key 
 ```
 
 Bitbucket es **opcional**: si no añades estas variables, el gateway arranca
-igual solo con Jira, y `create_pull_request` / `list_open_pull_requests` /
-`get_pull_request` devuelven un error explicando qué falta. Ver la sección
-[Bitbucket Cloud (pull requests)](#bitbucket-cloud-pull-requests) más abajo
-para cómo sacar el token.
+igual solo con Jira, y las tools de Bitbucket devuelven un error explicando
+qué falta. Ver las secciones
+[Bitbucket Cloud (pull requests)](#bitbucket-cloud-pull-requests) y
+[Bitbucket Pipelines](#bitbucket-pipelines) más abajo para cómo sacar el
+token.
 
 ```bash
 BITBUCKET_EMAIL=tu-email@dominio.com
-BITBUCKET_API_TOKEN=el-token-con-scopes-read:repository:bitbucket-read:pullrequest:bitbucket-write:pullrequest:bitbucket
+BITBUCKET_API_TOKEN=el-token-con-los-scopes-de-abajo
 BITBUCKET_WORKSPACE=tu-workspace
 BITBUCKET_ALLOWED_REPOS=repo-uno,repo-dos  # allowlist dura, sin espacios; vacío = las tools de Bitbucket fallan siempre
 BITBUCKET_DEFAULT_REPO=repo-uno  # opcional, repo usado si la tool no recibe repo_slug
 BITBUCKET_DEFAULT_TARGET_BRANCH=pre  # opcional, rama destino si la tool no recibe target_branch
+
+# Solo si vas a usar run_pipeline/get_pipeline. Allowlist dura de patrones de
+# pipeline custom (separados por comas); vacío = run_pipeline falla siempre.
+BITBUCKET_ALLOWED_PIPELINES=sello-version-pre,sello-version-staging,sello-version-prod
 ```
 
 `gateway/config.py` lo carga solo (vía `python-dotenv`) al arrancar —no hace
@@ -259,6 +265,46 @@ del `.env` — un repo fuera de esa lista falla sin tocar Bitbucket, y una
 allowlist vacía hace fallar las tools siempre (nunca "todos los repos del
 workspace").
 
+## Bitbucket Pipelines
+
+Además de PRs, el gateway puede lanzar **pipelines custom** ya definidos en
+el `bitbucket-pipelines.yml` de cada repo (los que van bajo la clave
+`custom:`) — pensado para pasos operativos acotados (ej. "sello de
+versión") lanzados por el agente justo después de un tag o un merge, **no**
+para desplegar código a mano ni para ejecutar cualquier pipeline del
+fichero.
+
+El mismo token de arriba necesita dos scopes más para esto:
+
+- `read:pipeline:bitbucket`
+- `write:pipeline:bitbucket`
+
+Si tu token de Bitbucket ya existe y no tiene estos scopes, edítalo (o
+crea uno nuevo) en
+[id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens)
+y actualiza `BITBUCKET_API_TOKEN` en el `.env` del servicio.
+
+Tools disponibles (nada de parar, cancelar ni relanzar pipelines — solo
+dispararlos de nuevo, uno por llamada):
+
+- `run_pipeline(pattern, ref_name="pre", ref_type="branch", repo_slug=None, confirm=False)` —
+  mismo protocolo preview→confirm que `create_pull_request`: sin `confirm`
+  devuelve exactamente lo que se enviaría (repo, pattern, rama/tag) sin
+  tocar Bitbucket; con `confirm=True` lo lanza de verdad y devuelve
+  `build_number`, `uuid`, `state` y la URL del run. `pattern` está siempre
+  restringido a la allowlist **obligatoria** `BITBUCKET_ALLOWED_PIPELINES`
+  del `.env` — un pattern fuera de esa lista falla sin tocar Bitbucket, y
+  vacía hace fallar la tool siempre (nunca "cualquier pipeline del repo"),
+  precisamente para que un agente no pueda disparar por error algo como un
+  deploy a producción.
+- `get_pipeline(build_number, repo_slug=None)` — solo lectura: `state`
+  (PENDING/IN_PROGRESS/COMPLETED) y `result` (SUCCESSFUL/FAILED/..., solo
+  cuando ya terminó).
+
+Si te da un 401/403 al llamar a cualquiera de las dos, el mensaje ya te
+dice que probablemente falta el scope de Pipelines en el token — no hace
+falta ir a adivinarlo desde un 403 pelado.
+
 ## Flujo de uso
 
 1. "¿Qué tareas tengo pendientes?" → `list_my_tasks`
@@ -307,6 +353,12 @@ mensaje de un commit antes de confirmarlo.
   que el agente toque; la allowlist es la barrera, no el scope del token.
 - **`create_pull_request` no duplica PRs**: antes de crear, busca si ya hay
   uno abierto para esa rama origen y devuelve ese en vez de crear otro.
+- **`run_pipeline` con allowlist dura de patrones** (`BITBUCKET_ALLOWED_PIPELINES`,
+  obligatoria): el `bitbucket-pipelines.yml` de un repo puede definir
+  pipelines custom que sí despliegan o tocan producción; la tool solo puede
+  lanzar los patrones que enumeres explícitamente, nunca "cualquiera que
+  exista en el fichero". Tampoco puede parar, cancelar ni relanzar nada —
+  solo disparar uno nuevo cada vez.
 - **Git queda fuera a propósito**: ya confías en Claude Code para manejar
   git por bash (commits, push, y también lectura de historial cuando lo
   necesitas), así que el gateway no intenta duplicar ni restringir eso —

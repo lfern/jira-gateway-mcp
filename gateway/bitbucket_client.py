@@ -1,7 +1,9 @@
 """
 Todo lo que este módulo NO expone, el agente no puede hacerlo: nada de
-merge, approve, decline ni push. Solo crear PR (con confirmación en dos
-pasos en server.py) y leerlos.
+merge, approve, decline ni push de PRs; nada de parar, cancelar ni relanzar
+pipelines. Solo crear/leer PRs y lanzar/leer pipelines custom que ya estén
+en su allowlist (confirmación en dos pasos en server.py para lo que
+escribe).
 """
 import re
 
@@ -14,6 +16,10 @@ from .config import Config
 # controles adicionales (sin "..", sin barra final, sin dobles barras) se
 # hacen aparte porque son más legibles fuera de la regex.
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+
+# Nombre de pipeline custom (clave en `custom:` de bitbucket-pipelines.yml):
+# más restrictivo que un nombre de rama, no necesita '/'.
+_PIPELINE_PATTERN_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 
 
 class BitbucketError(Exception):
@@ -45,6 +51,31 @@ def validate_pr_id(pr_id: int) -> int:
     return pr_id
 
 
+def validate_pipeline_pattern(pattern: str, cfg: Config) -> None:
+    if not cfg.bitbucket_allowed_pipelines:
+        raise BitbucketError(
+            "no hay pipelines permitidos configurados (BITBUCKET_ALLOWED_PIPELINES "
+            "vacío en el .env del servicio)."
+        )
+    if not pattern or not _PIPELINE_PATTERN_RE.match(pattern):
+        raise BitbucketError(f"nombre de pipeline con formato inválido: {pattern!r}")
+    if pattern not in cfg.bitbucket_allowed_pipelines:
+        raise BitbucketError(
+            f"pipeline no permitido: {pattern!r}. Permitidos: {list(cfg.bitbucket_allowed_pipelines)}"
+        )
+
+
+def validate_ref_type(ref_type: str) -> None:
+    if ref_type not in ("branch", "tag"):
+        raise BitbucketError(f"ref_type inválido: {ref_type!r} (debe ser 'branch' o 'tag')")
+
+
+def validate_build_number(build_number: int) -> int:
+    if isinstance(build_number, bool) or not isinstance(build_number, int) or build_number <= 0:
+        raise BitbucketError(f"build_number inválido: {build_number!r}")
+    return build_number
+
+
 def _raise_for_status(resp: requests.Response, action: str) -> None:
     if resp.ok:
         return
@@ -54,6 +85,19 @@ def _raise_for_status(resp: requests.Response, action: str) -> None:
     except ValueError:
         message = resp.text[:300]
     raise BitbucketError(f"Bitbucket {resp.status_code} al {action}: {message}")
+
+
+def _raise_for_pipeline_status(resp: requests.Response, action: str) -> None:
+    """Como _raise_for_status, pero con pista explícita en 401/403: el fallo
+    más habitual al añadir Pipelines es que el token siga sin ese scope."""
+    if resp.status_code in (401, 403):
+        raise BitbucketError(
+            f"Bitbucket {resp.status_code} al {action}: el token no tiene permiso "
+            "para Pipelines (probablemente falta el scope de escritura de "
+            "Pipelines en BITBUCKET_API_TOKEN). Revisa los scopes del token en "
+            "id.atlassian.com y actualízalo en el .env del servicio."
+        )
+    _raise_for_status(resp, action)
 
 
 class BitbucketClient:
@@ -179,3 +223,66 @@ class BitbucketClient:
             if pr["source"] == source_branch:
                 return pr
         return None
+
+    def run_pipeline(self, repo_slug: str, pattern: str, ref_name: str, ref_type: str) -> dict:
+        """Lanza el pipeline custom de verdad. Requiere que el llamante ya
+        haya confirmado — esta función no pregunta nada, solo ejecuta. NUNCA
+        para, cancela ni relanza pipelines: solo dispara uno nuevo cada vez
+        que se llama."""
+        validate_repo_slug(repo_slug, self.cfg)
+        validate_pipeline_pattern(pattern, self.cfg)
+        validate_ref_type(ref_type)
+        validate_branch_name(ref_name)
+
+        payload = {
+            "target": {
+                "type": "pipeline_ref_target",
+                "ref_type": ref_type,
+                "ref_name": ref_name,
+                "selector": {"type": "custom", "pattern": pattern},
+            }
+        }
+        resp = requests.post(
+            f"{self._repo_url(repo_slug)}/pipelines/",
+            headers=self._headers(),
+            json=payload,
+            timeout=15,
+        )
+        _raise_for_pipeline_status(resp, f"lanzar el pipeline {pattern!r} en {repo_slug}")
+
+        pipeline = resp.json()
+        build_number = pipeline["build_number"]
+        return {
+            "build_number": build_number,
+            "uuid": pipeline["uuid"],
+            "state": (pipeline.get("state") or {}).get("name"),
+            "url": (
+                f"https://bitbucket.org/{self.cfg.bitbucket_workspace}/"
+                f"{repo_slug}/pipelines/results/{build_number}"
+            ),
+        }
+
+    def get_pipeline(self, repo_slug: str, build_number: int) -> dict:
+        """Solo lectura."""
+        validate_repo_slug(repo_slug, self.cfg)
+        build_number = validate_build_number(build_number)
+
+        resp = requests.get(
+            f"{self._repo_url(repo_slug)}/pipelines/{build_number}",
+            headers=self._headers(),
+            timeout=15,
+        )
+        _raise_for_pipeline_status(resp, f"leer el pipeline {build_number} de {repo_slug}")
+
+        pipeline = resp.json()
+        state = pipeline.get("state") or {}
+        return {
+            "build_number": pipeline["build_number"],
+            "uuid": pipeline["uuid"],
+            "state": state.get("name"),
+            "result": (state.get("result") or {}).get("name"),
+            "url": (
+                f"https://bitbucket.org/{self.cfg.bitbucket_workspace}/"
+                f"{repo_slug}/pipelines/results/{pipeline['build_number']}"
+            ),
+        }

@@ -12,15 +12,15 @@ Dos modos, elegidos por MCP_TRANSPORT:
   Code, y el agente solo puede hablar con las tools por red, nunca leer el
   token directamente.
 
-Alcance deliberadamente acotado: Jira y (opcional) pull requests de
-Bitbucket Cloud. El resto de git (rama, commits, push, historial) lo
-maneja Claude Code directamente por bash, como ya hace — este gateway no
-intenta ser una barrera para git, solo cubre lo que el agente no puede
-hacer por sí mismo (hablar con Jira/Bitbucket con tus credenciales sin que
-el agente las vea). Bitbucket es opcional: si el .env no trae
-BITBUCKET_EMAIL/BITBUCKET_API_TOKEN/BITBUCKET_WORKSPACE, el servicio
-arranca igual solo con Jira y las tools de Bitbucket devuelven un error
-explicando qué falta.
+Alcance deliberadamente acotado: Jira y (opcional) Bitbucket Cloud —
+pull requests y lanzar pipelines custom ya en su allowlist. El resto de
+git (rama, commits, push, historial) lo maneja Claude Code directamente
+por bash, como ya hace — este gateway no intenta ser una barrera para
+git, solo cubre lo que el agente no puede hacer por sí mismo (hablar con
+Jira/Bitbucket con tus credenciales sin que el agente las vea). Bitbucket
+es opcional: si el .env no trae BITBUCKET_EMAIL/BITBUCKET_API_TOKEN/
+BITBUCKET_WORKSPACE, el servicio arranca igual solo con Jira y las tools
+de Bitbucket devuelven un error explicando qué falta.
 """
 import os
 
@@ -294,6 +294,74 @@ def get_pull_request(pr_id: int, repo_slug: str | None = None) -> dict:
 
     try:
         return _bitbucket.get_pull_request(resolved_repo, pr_id)
+    except BitbucketError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def run_pipeline(
+    pattern: str,
+    ref_name: str = "pre",
+    ref_type: str = "branch",
+    repo_slug: str | None = None,
+    confirm: bool = False,
+) -> dict:
+    """Lanza un pipeline CUSTOM de Bitbucket (uno de los definidos bajo
+    `custom:` en bitbucket-pipelines.yml) sobre una rama o tag. Pensada para
+    pasos operativos acotados (ej. sellos de versión), NO para desplegar
+    código a mano. Solo puede lanzar patrones que estén en la allowlist
+    BITBUCKET_ALLOWED_PIPELINES — si `pattern` no está ahí, falla sin llamar
+    a Bitbucket y sin ninguna excepción. Esta tool NUNCA para, cancela ni
+    relanza pipelines: cada llamada con confirm=True dispara uno nuevo.
+
+    IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
+    lanza nada, solo devuelve la vista previa exacta de lo que se enviaría
+    (repo, pattern, rama/tag) — muéstrasela al usuario tal cual. Solo si el
+    usuario la aprueba, vuelve a llamar con confirm=True y los mismos datos
+    para lanzarlo de verdad."""
+    if _bitbucket is None:
+        return _bitbucket_unavailable()
+
+    resolved_repo = _resolve_bb_repo(repo_slug)
+    if not resolved_repo:
+        return {"error": "falta repo_slug (o configura BITBUCKET_DEFAULT_REPO en el .env)."}
+
+    if not confirm:
+        return {
+            "preview": True,
+            "repo": resolved_repo,
+            "pattern": pattern,
+            "ref_name": ref_name,
+            "ref_type": ref_type,
+            "note": (
+                "Nada se ha enviado a Bitbucket todavía. Revisa este preview "
+                "con el usuario y, si lo aprueba, llama de nuevo con "
+                "confirm=True y los mismos datos."
+            ),
+        }
+
+    try:
+        result = _bitbucket.run_pipeline(resolved_repo, pattern, ref_name, ref_type)
+    except BitbucketError as e:
+        return {"error": str(e)}
+
+    return {"started": True, **result}
+
+
+@mcp.tool()
+def get_pipeline(build_number: int, repo_slug: str | None = None) -> dict:
+    """Estado de un pipeline de Bitbucket por build_number: `state`
+    (PENDING/IN_PROGRESS/COMPLETED) y `result` (SUCCESSFUL/FAILED/..., solo
+    presente cuando ya ha terminado). Solo lectura."""
+    if _bitbucket is None:
+        return _bitbucket_unavailable()
+
+    resolved_repo = _resolve_bb_repo(repo_slug)
+    if not resolved_repo:
+        return {"error": "falta repo_slug (o configura BITBUCKET_DEFAULT_REPO en el .env)."}
+
+    try:
+        return _bitbucket.get_pipeline(resolved_repo, build_number)
     except BitbucketError as e:
         return {"error": str(e)}
 

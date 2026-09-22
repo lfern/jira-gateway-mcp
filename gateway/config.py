@@ -54,11 +54,19 @@ class Config:
     bitbucket_allowed_repos: tuple[str, ...] = ()
     bitbucket_default_repo: str | None = None
     bitbucket_default_target_branch: str = "pre"
+    # Allowlist de patrones de pipeline custom que run_pipeline puede lanzar.
+    # Obligatoria para usar run_pipeline: vacía = la tool falla siempre, nunca
+    # "cualquier pipeline del bitbucket-pipelines.yml" (evita que un agente
+    # dispare por error algo como un deploy a producción).
+    bitbucket_allowed_pipelines: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Config":
         allowed_repos = tuple(
             r.strip() for r in os.environ.get("BITBUCKET_ALLOWED_REPOS", "").split(",") if r.strip()
+        )
+        allowed_pipelines = tuple(
+            p.strip() for p in os.environ.get("BITBUCKET_ALLOWED_PIPELINES", "").split(",") if p.strip()
         )
         return cls(
             jira_email=_require("JIRA_EMAIL"),
@@ -76,6 +84,7 @@ class Config:
             bitbucket_allowed_repos=allowed_repos,
             bitbucket_default_repo=os.environ.get("BITBUCKET_DEFAULT_REPO") or None,
             bitbucket_default_target_branch=os.environ.get("BITBUCKET_DEFAULT_TARGET_BRANCH", "pre"),
+            bitbucket_allowed_pipelines=allowed_pipelines,
         )
 
     @property
