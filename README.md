@@ -225,6 +225,34 @@ reales y reinicia el servicio para que los recoja:
 sudo systemctl restart jira-gateway-<empresa>.service
 ```
 
+### Añadir Pipelines a una instalación que ya tiene Bitbucket (PRs)
+
+Si tu instancia ya tiene el bloque `BITBUCKET_*` relleno (PRs funcionando)
+y quieres activar `run_pipeline`/`get_pipeline`, no hace falta rehacer
+nada — solo dos cambios sobre el `.env` que ya tienes:
+
+```bash
+sudoedit /opt/jira-gateway-<empresa>/.env
+```
+
+1. **Variable nueva** (no existía antes de Pipelines): añade
+   `BITBUCKET_ALLOWED_PIPELINES` con los patrones que quieras permitir, ej.
+   `BITBUCKET_ALLOWED_PIPELINES=sello-version-pre,sello-version-staging,sello-version-prod`
+   — ver [Bitbucket Pipelines](#bitbucket-pipelines).
+2. **Variable ya existente que hay que actualizar**: `BITBUCKET_API_TOKEN`
+   sigue siendo el mismo token de Bitbucket, pero necesita 2 scopes más
+   (`read:pipeline:bitbucket` y `write:pipeline:bitbucket`) — edítalo o
+   regenéralo en
+   [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens)
+   con los 5 scopes juntos (los 3 de PRs + estos 2) y pega el valor nuevo
+   aquí. Ver [Notas](#notas) para la lista completa de scopes.
+
+Reinicia para que lo recoja:
+
+```bash
+sudo systemctl restart jira-gateway-<empresa>.service
+```
+
 ## Bitbucket Cloud (pull requests)
 
 Las app passwords de Bitbucket están retiradas (fin de soporte:
