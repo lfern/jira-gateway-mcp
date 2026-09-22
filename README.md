@@ -383,3 +383,11 @@ mensaje de un commit antes de confirmarlo.
 - El scope de token recomendado: clásico `write:jira-work` + `read:jira-work`
   (los granulares de escritura tienen un bug conocido en POST a fecha de
   hoy — ver conversación anterior).
+- Scopes del token de Bitbucket (uno solo, separado del de Jira — ver
+  [Configuración](#configuración-variables-de-entorno)): `read:repository:bitbucket`,
+  `read:pullrequest:bitbucket` y `write:pullrequest:bitbucket` para PRs
+  ([detalle](#bitbucket-cloud-pull-requests)); si además vas a usar
+  `run_pipeline`/`get_pipeline`, añade `read:pipeline:bitbucket` y
+  `write:pipeline:bitbucket` ([detalle](#bitbucket-pipelines)). Las app
+  passwords de Bitbucket están retiradas (fin: 28-jul-2026) — el token se
+  crea en [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens).
