@@ -76,7 +76,7 @@ if [[ -f "$SVC_ENV" ]]; then
 else
   cat > "$SVC_ENV" <<'EOF'
 # Rellena estos valores (mismo formato que la sección Configuración del
-# README). El servicio no arrancará hasta que estén todos.
+# README). El servicio no arrancará hasta que estén las obligatorias de Jira.
 JIRA_EMAIL=
 JIRA_API_TOKEN=
 JIRA_CLOUD_ID=
@@ -86,6 +86,15 @@ JIRA_IN_PROGRESS_STATUS=In Progress
 JIRA_SELECTED_STATUS=Selected for Development
 JIRA_DEFAULT_ISSUE_TYPE=Task
 JIRA_SUBTASK_ISSUE_TYPE=Subtask
+
+# Bitbucket es opcional -- si se deja vacío, el servicio arranca igual solo
+# con Jira. Ver la sección Bitbucket del README para el token y los scopes.
+BITBUCKET_EMAIL=
+BITBUCKET_API_TOKEN=
+BITBUCKET_WORKSPACE=
+BITBUCKET_ALLOWED_REPOS=
+BITBUCKET_DEFAULT_REPO=
+BITBUCKET_DEFAULT_TARGET_BRANCH=pre
 EOF
   chown "$SVC_USER":"$SVC_USER" "$SVC_ENV"
   chmod 600 "$SVC_ENV"

@@ -46,9 +46,20 @@ class Config:
     selected_status: str
     default_issue_type: str
     subtask_issue_type: str
+    # Bitbucket es opcional: si falta, el gateway arranca igual (solo Jira)
+    # y las tools de Bitbucket devuelven un error explicando qué falta.
+    bitbucket_email: str | None = None
+    bitbucket_api_token: str | None = None
+    bitbucket_workspace: str | None = None
+    bitbucket_allowed_repos: tuple[str, ...] = ()
+    bitbucket_default_repo: str | None = None
+    bitbucket_default_target_branch: str = "pre"
 
     @classmethod
     def from_env(cls) -> "Config":
+        allowed_repos = tuple(
+            r.strip() for r in os.environ.get("BITBUCKET_ALLOWED_REPOS", "").split(",") if r.strip()
+        )
         return cls(
             jira_email=_require("JIRA_EMAIL"),
             jira_api_token=_require("JIRA_API_TOKEN"),
@@ -59,6 +70,12 @@ class Config:
             selected_status=os.environ.get("JIRA_SELECTED_STATUS", "Selected for Development"),
             default_issue_type=os.environ.get("JIRA_DEFAULT_ISSUE_TYPE", "Task"),
             subtask_issue_type=os.environ.get("JIRA_SUBTASK_ISSUE_TYPE", "Subtask"),
+            bitbucket_email=os.environ.get("BITBUCKET_EMAIL") or None,
+            bitbucket_api_token=os.environ.get("BITBUCKET_API_TOKEN") or None,
+            bitbucket_workspace=os.environ.get("BITBUCKET_WORKSPACE") or None,
+            bitbucket_allowed_repos=allowed_repos,
+            bitbucket_default_repo=os.environ.get("BITBUCKET_DEFAULT_REPO") or None,
+            bitbucket_default_target_branch=os.environ.get("BITBUCKET_DEFAULT_TARGET_BRANCH", "pre"),
         )
 
     @property
@@ -68,4 +85,17 @@ class Config:
     @property
     def auth_header(self) -> str:
         raw = f"{self.jira_email}:{self.jira_api_token}".encode()
+        return "Basic " + base64.b64encode(raw).decode()
+
+    @property
+    def bitbucket_configured(self) -> bool:
+        return bool(self.bitbucket_email and self.bitbucket_api_token and self.bitbucket_workspace)
+
+    @property
+    def bitbucket_api_base(self) -> str:
+        return "https://api.bitbucket.org/2.0"
+
+    @property
+    def bitbucket_auth_header(self) -> str:
+        raw = f"{self.bitbucket_email}:{self.bitbucket_api_token}".encode()
         return "Basic " + base64.b64encode(raw).decode()

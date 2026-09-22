@@ -12,15 +12,21 @@ Dos modos, elegidos por MCP_TRANSPORT:
   Code, y el agente solo puede hablar con las tools por red, nunca leer el
   token directamente.
 
-Alcance deliberadamente reducido: SOLO Jira. Git lo maneja Claude Code
-directamente por bash, como ya hace — este gateway no intenta ser una
-barrera para git, solo cubre lo que el agente no puede hacer por sí mismo
-(hablar con Jira con tus credenciales sin que el agente las vea).
+Alcance deliberadamente acotado: Jira y (opcional) pull requests de
+Bitbucket Cloud. El resto de git (rama, commits, push, historial) lo
+maneja Claude Code directamente por bash, como ya hace — este gateway no
+intenta ser una barrera para git, solo cubre lo que el agente no puede
+hacer por sí mismo (hablar con Jira/Bitbucket con tus credenciales sin que
+el agente las vea). Bitbucket es opcional: si el .env no trae
+BITBUCKET_EMAIL/BITBUCKET_API_TOKEN/BITBUCKET_WORKSPACE, el servicio
+arranca igual solo con Jira y las tools de Bitbucket devuelven un error
+explicando qué falta.
 """
 import os
 
 from mcp.server.fastmcp import FastMCP
 
+from .bitbucket_client import BitbucketClient, BitbucketError
 from .config import Config, ConfigError
 from .jira_client import JiraClient, JiraError
 
@@ -36,6 +42,7 @@ except ConfigError as e:
     raise SystemExit(f"Config inválida: {e}")
 
 _jira = JiraClient(_cfg)
+_bitbucket = BitbucketClient(_cfg) if _cfg.bitbucket_configured else None
 
 
 @mcp.tool()
@@ -178,6 +185,117 @@ def add_comment(issue_key: str, body: str, confirm: bool = False) -> dict:
         return {"error": str(e)}
 
     return {"created": True, "issue_key": issue_key, **result}
+
+
+def _bitbucket_unavailable() -> dict:
+    return {
+        "error": (
+            "Bitbucket no está configurado en este servicio: falta "
+            "BITBUCKET_EMAIL/BITBUCKET_API_TOKEN/BITBUCKET_WORKSPACE en el "
+            ".env del servicio."
+        )
+    }
+
+
+def _resolve_bb_repo(repo_slug: str | None) -> str | None:
+    return repo_slug or _cfg.bitbucket_default_repo
+
+
+@mcp.tool()
+def create_pull_request(
+    source_branch: str,
+    title: str,
+    description: str = "",
+    repo_slug: str | None = None,
+    target_branch: str | None = None,
+    close_source_branch: bool = True,
+    confirm: bool = False,
+) -> dict:
+    """Crea un pull request en Bitbucket Cloud desde `source_branch` hacia
+    `target_branch` (por defecto BITBUCKET_DEFAULT_TARGET_BRANCH, ej.
+    'pre'). Si no se pasa `repo_slug`, usa BITBUCKET_DEFAULT_REPO. La
+    descripción la escribe el agente que llama (commits de la rama, clave
+    Jira, etc.) — esta tool no inventa ninguna plantilla, solo transporta lo
+    que se le pasa. No añade reviewers explícitos: si el repo tiene default
+    reviewers configurados en Bitbucket, se añaden solos.
+
+    IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
+    crea nada, solo devuelve una vista previa exacta de lo que se enviaría
+    — muéstrasela al usuario tal cual. Solo si el usuario la aprueba, vuelve
+    a llamar con confirm=True y los mismos datos para crearlo de verdad. Si
+    ya existe un PR abierto para esa rama origen, no crea uno nuevo: te
+    devuelve el existente. Esta tool NUNCA hace merge, approve, decline ni
+    push — solo crea o encuentra el PR."""
+    if _bitbucket is None:
+        return _bitbucket_unavailable()
+
+    resolved_repo = _resolve_bb_repo(repo_slug)
+    if not resolved_repo:
+        return {"error": "falta repo_slug (o configura BITBUCKET_DEFAULT_REPO en el .env)."}
+    resolved_target = target_branch or _cfg.bitbucket_default_target_branch
+
+    if not confirm:
+        return {
+            "preview": True,
+            "repo": resolved_repo,
+            "source_branch": source_branch,
+            "target_branch": resolved_target,
+            "title": title,
+            "description": description,
+            "close_source_branch": close_source_branch,
+            "note": (
+                "Nada se ha enviado a Bitbucket todavía. Revisa este preview "
+                "con el usuario y, si lo aprueba, llama de nuevo con "
+                "confirm=True y los mismos datos."
+            ),
+        }
+
+    try:
+        existing = _bitbucket.find_open_pr_for_branch(resolved_repo, source_branch)
+        if existing:
+            return {"already_exists": True, **existing}
+
+        result = _bitbucket.create_pull_request(
+            resolved_repo, source_branch, resolved_target, title, description, close_source_branch
+        )
+    except BitbucketError as e:
+        return {"error": str(e)}
+
+    return {"created": True, **result}
+
+
+@mcp.tool()
+def list_open_pull_requests(repo_slug: str | None = None) -> list[dict]:
+    """Lista los pull requests abiertos del repo (por defecto
+    BITBUCKET_DEFAULT_REPO). Solo lectura."""
+    if _bitbucket is None:
+        return [_bitbucket_unavailable()]
+
+    resolved_repo = _resolve_bb_repo(repo_slug)
+    if not resolved_repo:
+        return [{"error": "falta repo_slug (o configura BITBUCKET_DEFAULT_REPO en el .env)."}]
+
+    try:
+        return _bitbucket.list_open_pull_requests(resolved_repo)
+    except BitbucketError as e:
+        return [{"error": str(e)}]
+
+
+@mcp.tool()
+def get_pull_request(pr_id: int, repo_slug: str | None = None) -> dict:
+    """Detalle de un pull request de Bitbucket por id (repo por defecto
+    BITBUCKET_DEFAULT_REPO si no se indica). Solo lectura."""
+    if _bitbucket is None:
+        return _bitbucket_unavailable()
+
+    resolved_repo = _resolve_bb_repo(repo_slug)
+    if not resolved_repo:
+        return {"error": "falta repo_slug (o configura BITBUCKET_DEFAULT_REPO en el .env)."}
+
+    try:
+        return _bitbucket.get_pull_request(resolved_repo, pr_id)
+    except BitbucketError as e:
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":

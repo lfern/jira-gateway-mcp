@@ -2,11 +2,15 @@
 
 MCP local que expone acciones al agente: `list_my_tasks`,
 `list_unassigned_tasks`, `list_task_comments`, `create_task` y `add_comment`
-(ambas con confirmación obligatoria en dos pasos), y `start_task`. Alcance
-deliberadamente reducido a Jira — git (rama, commits, push, historial) lo
+(ambas con confirmación obligatoria en dos pasos), y `start_task` para
+Jira; y, si Bitbucket está configurado, `create_pull_request` (también con
+confirmación en dos pasos), `list_open_pull_requests` y `get_pull_request`
+para pull requests de Bitbucket Cloud. Alcance deliberadamente acotado a
+Jira y pull requests de Bitbucket — git (rama, commits, push, historial) lo
 sigue manejando Claude Code directamente por bash, como ya hacías. Este
 gateway no intenta ser una barrera para git; solo cubre lo que el agente no
-puede hacer por sí mismo: hablar con Jira sin ver tus credenciales.
+puede hacer por sí mismo: hablar con Jira/Bitbucket sin ver tus
+credenciales.
 
 ## Instalación
 
@@ -40,6 +44,21 @@ JIRA_IN_PROGRESS_STATUS=In Progress  # opcional, ajusta al nombre real de tu wor
 JIRA_SELECTED_STATUS=Selected for Development  # opcional, estado al que pasa create_task tras crear
 JIRA_DEFAULT_ISSUE_TYPE=Task  # opcional, ajusta al nombre real de tu tipo de issue
 JIRA_SUBTASK_ISSUE_TYPE=Subtask  # opcional, tipo usado al crear con parent_key sin issue_type explícito
+```
+
+Bitbucket es **opcional**: si no añades estas variables, el gateway arranca
+igual solo con Jira, y `create_pull_request` / `list_open_pull_requests` /
+`get_pull_request` devuelven un error explicando qué falta. Ver la sección
+[Bitbucket Cloud (pull requests)](#bitbucket-cloud-pull-requests) más abajo
+para cómo sacar el token.
+
+```bash
+BITBUCKET_EMAIL=tu-email@dominio.com
+BITBUCKET_API_TOKEN=el-token-con-scopes-read:repository:bitbucket-read:pullrequest:bitbucket-write:pullrequest:bitbucket
+BITBUCKET_WORKSPACE=tu-workspace
+BITBUCKET_ALLOWED_REPOS=repo-uno,repo-dos  # allowlist dura, sin espacios; vacío = las tools de Bitbucket fallan siempre
+BITBUCKET_DEFAULT_REPO=repo-uno  # opcional, repo usado si la tool no recibe repo_slug
+BITBUCKET_DEFAULT_TARGET_BRANCH=pre  # opcional, rama destino si la tool no recibe target_branch
 ```
 
 `gateway/config.py` lo carga solo (vía `python-dotenv`) al arrancar —no hace
@@ -181,6 +200,65 @@ mismo (compruébalo con `bash scripts/jira-switch.sh`, sin sudo); si no está
 activa, el redeploy ya deja el código listo para la próxima vez que la
 actives con `jira-switch.sh`.
 
+### Añadir Bitbucket a una instalación ya desplegada
+
+`setup_service.sh` solo crea el `.env` si no existe todavía — si tu
+instancia ya está desplegada (solo con Jira), las variables `BITBUCKET_*`
+no aparecen solas. Añádelas a mano al `.env` de esa instancia:
+
+```bash
+sudoedit /opt/jira-gateway-<empresa>/.env
+# (alternativa equivalente: sudo -u jira-gw-<empresa> nano /opt/jira-gateway-<empresa>/.env)
+```
+
+Pega el bloque `BITBUCKET_*` de la sección
+[Configuración](#configuración-variables-de-entorno), rellena los valores
+reales y reinicia el servicio para que los recoja:
+
+```bash
+sudo systemctl restart jira-gateway-<empresa>.service
+```
+
+## Bitbucket Cloud (pull requests)
+
+Las app passwords de Bitbucket están retiradas (fin de soporte:
+28-jul-2026). La autenticación usa Basic auth con tu email de Atlassian +
+un **API token de cuenta** (no un app password) contra
+`https://api.bitbucket.org/2.0`. Créalo en
+[id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens)
+con exactamente estos scopes:
+
+- `read:repository:bitbucket`
+- `read:pullrequest:bitbucket`
+- `write:pullrequest:bitbucket`
+
+**Ese token lo generas y lo pegas en el `.env` del servicio tú mismo — el
+agente nunca lo pide ni lo escribe.**
+
+Tools disponibles (nada de merge, approve, decline ni push — eso lo sigues
+haciendo tú o Bitbucket en el momento del merge):
+
+- `create_pull_request(source_branch, title, description, repo_slug=None, target_branch=None, close_source_branch=True, confirm=False)` —
+  mismo protocolo preview→confirm que `create_task`: sin `confirm` devuelve
+  exactamente lo que se enviaría (repo, rama origen, rama destino, título,
+  descripción completa, `close_source_branch`) sin tocar Bitbucket; con
+  `confirm=True`, si ya hay un PR abierto para esa rama origen no crea uno
+  nuevo (devuelve el existente con `already_exists: true`), si no lo crea.
+  La descripción la redacta el agente (a partir de los commits de la rama y
+  la clave Jira que suele ir en el nombre, ej. `feature/REF-432-...`); el
+  gateway no la inventa, solo la transporta. No se envían reviewers
+  explícitos: si el repo tiene default reviewers configurados en Bitbucket,
+  se añaden solos al crear el PR.
+- `list_open_pull_requests(repo_slug=None)` — solo lectura, PRs abiertos del
+  repo (por defecto `BITBUCKET_DEFAULT_REPO`).
+- `get_pull_request(pr_id, repo_slug=None)` — solo lectura, detalle de un PR
+  por id.
+
+`repo_slug` está siempre restringido a la allowlist `BITBUCKET_ALLOWED_REPOS`
+del `.env` — un repo fuera de esa lista falla sin tocar Bitbucket, y una
+allowlist vacía hace fallar las tools siempre (nunca "todos los repos del
+workspace").
+
 ## Flujo de uso
 
 1. "¿Qué tareas tengo pendientes?" → `list_my_tasks`
@@ -203,7 +281,14 @@ actives con `jira-switch.sh`.
    herramientas normales de bash/git — el gateway no interviene en nada de
    esto, y puede seguir leyendo `git log`/`git diff`/`git blame` sin
    restricción alguna.
-8. Tú abres el PR a mano cuando toque.
+8. Si Bitbucket está configurado: "Abre el PR de esta rama" →
+   `create_pull_request` (sin `confirm`) → el agente te enseña el preview
+   (repo, rama origen/destino, título, descripción completa) → si dices que
+   sí, vuelve a llamar con `confirm=True` → lo crea, o te devuelve el que ya
+   estuviera abierto para esa rama si lo había. Si no está configurado,
+   abres el PR a mano como hasta ahora.
+9. "¿Qué PRs hay abiertos en refunder-react?" → `list_open_pull_requests`.
+   "¿Cómo va el PR 87?" → `get_pull_request`. Ambas de solo lectura.
 
 Nota sobre la confirmación: además del preview de `create_task`, Claude Code
 ya te pide aprobación antes de ejecutar cualquier llamada a un MCP no
@@ -214,8 +299,14 @@ mensaje de un commit antes de confirmarlo.
 
 ## Por qué está diseñado así
 
-- **Catálogo cerrado de tools**: solo 2 acciones, ambas de Jira, ninguna
-  toca git. No hay "ejecuta este comando" genérico ni JQL libre.
+- **Catálogo cerrado de tools**: solo lo que aparece arriba, nada toca git
+  ni ejecuta comandos arbitrarios. No hay "ejecuta este comando" genérico,
+  ni JQL libre en Jira, ni query BBQL libre en Bitbucket.
+- **Bitbucket con allowlist dura de repos** (`BITBUCKET_ALLOWED_REPOS`):
+  el token puede tener acceso a más repos del workspace de los que quieres
+  que el agente toque; la allowlist es la barrera, no el scope del token.
+- **`create_pull_request` no duplica PRs**: antes de crear, busca si ya hay
+  uno abierto para esa rama origen y devuelve ese en vez de crear otro.
 - **Git queda fuera a propósito**: ya confías en Claude Code para manejar
   git por bash (commits, push, y también lectura de historial cuando lo
   necesitas), así que el gateway no intenta duplicar ni restringir eso —
