@@ -110,6 +110,34 @@ Vale para uso personal en el que confías en que el agente usa las tools
 porque son el camino natural para lo que le pides, no porque no tenga forma
 de saltárselas.
 
+#### Variante sin clonar el repo (`uvx`)
+
+Si solo quieres usarlo, sin tocar el código, basta con tener
+[`uv`](https://docs.astral.sh/uv/) instalado y el
+`~/.secrets/jira-gateway.env` de [Configuración](#configuración-variables-de-entorno).
+`uvx` descarga el paquete desde git, lo instala en un entorno aislado en
+caché (con su propio Python 3.11+ si hace falta) y lanza el comando
+`jira-gateway`:
+
+```json
+{
+  "mcpServers": {
+    "jira-gateway": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/lfern/jira-gateway-mcp@v0.3.0", "jira-gateway"]
+    }
+  }
+}
+```
+
+Fijar el tag (`@v0.3.0`) evita que cambie de versión sin que lo decidas;
+para actualizar, cambia el tag. Si `uvx` no está en el `PATH` que ve
+Claude Code, pon la ruta absoluta (normalmente `~/.local/bin/uvx`).
+
+Si ya tienes el repo clonado e instalado en un venv, el mismo comando está
+disponible como `/ruta/a/jira-git-gateway/.venv/bin/jira-gateway`
+(equivalente a `python -m gateway.server`, que sigue funcionando).
+
 ### Opción B — servicio systemd bajo usuario separado (aislamiento real)
 
 `scripts/setup_service.sh <empresa>` despliega el gateway bajo un usuario

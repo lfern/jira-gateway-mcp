@@ -366,5 +366,10 @@ def get_pipeline(build_number: int, repo_slug: str | None = None) -> dict:
         return {"error": str(e)}
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point del script `jira-gateway` (ver [project.scripts])."""
     mcp.run(transport=os.environ.get("MCP_TRANSPORT", "stdio"))
+
+
+if __name__ == "__main__":
+    main()
