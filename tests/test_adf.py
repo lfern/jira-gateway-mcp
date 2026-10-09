@@ -124,6 +124,7 @@ def test_marks_move_whitespace_outside_delimiters():
         "[espacio](<https://x.io/a b>)",
         "````\n```\ndentro\n```\n````",
         "```\n    def f():\n\treturn 1\n```",
+        "- item\n\n  ```\n  \tcon tab\n  ```",
         "# C \\#",
         "**dos** **negritas** y [un](https://a.io) [enlace](https://b.io)",
         "**negrita**, *cursiva*, **_ambas_**, ~~tachado~~ y [enlace **fuerte**](https://x.io)",
@@ -167,5 +168,29 @@ def test_roundtrip_literal_text(text):
     ],
 )
 def test_lossy_whitespace_is_reported(doc, lost):
+    _, unsupported = adf_to_markdown(doc)
+    assert lost in unsupported
+
+
+def test_tab_indented_fence_keeps_code_indentation():
+    adf = markdown_to_adf("\t```\n\t\tcode\n\t```")
+    assert adf["content"][0]["content"] == [_t("\tcode")]
+
+
+@pytest.mark.parametrize(
+    "doc, lost",
+    [
+        (_doc(_p(_t("x", {"type": "link", "attrs": {"href": "<foo>"}}))), "enlaces con < o > en la URL"),
+        (
+            _doc(_p(_t("a]b", "code", {"type": "link", "attrs": {"href": "https://x.io"}}))),
+            "código con ] dentro de un enlace",
+        ),
+        (
+            _doc({"type": "heading", "attrs": {"level": 2}, "content": [_t(" título ")]}),
+            "espacios al inicio o final de títulos",
+        ),
+    ],
+)
+def test_lossy_links_and_headings_are_reported(doc, lost):
     _, unsupported = adf_to_markdown(doc)
     assert lost in unsupported

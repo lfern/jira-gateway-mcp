@@ -59,11 +59,17 @@ def _indent(line: str) -> int:
 
 
 def _strip_indent(line: str, n: int) -> str:
-    """Quita hasta `n` caracteres de sangría del principio (sin tocar el resto)."""
-    stripped = 0
-    while stripped < n and line[stripped : stripped + 1] in (" ", "\t"):
-        stripped += 1
-    return line[stripped:]
+    """Quita hasta `n` columnas de sangría (tab = hasta la siguiente columna
+    múltiplo de 4, como `_indent`), sin expandir los tabs del resto."""
+    col = 0
+    pos = 0
+    while pos < len(line) and line[pos] in " \t":
+        width = 4 - col % 4 if line[pos] == "\t" else 1
+        if col + width > n:
+            break
+        col += width
+        pos += 1
+    return line[pos:]
 
 
 def _starts_block(line: str) -> bool:
@@ -290,7 +296,10 @@ def _block(node: dict, lossy: set) -> str:
         text = _inline(content, lossy)
         if "\n" in text:
             lossy.add("saltos de línea en títulos")
-        text = text.replace("\n", " ").strip()
+        text = text.replace("\n", " ")
+        if text != text.strip():
+            lossy.add("espacios al inicio o final de títulos")
+        text = text.strip()
         if text.endswith("#"):
             text = text[:-1] + "\\#"  # si no, se leería como cierre del título
         return "#" * attrs.get("level", 1) + " " + text
@@ -343,7 +352,10 @@ def _link_href(node: dict) -> str | None:
     return link.get("attrs", {}).get("href", "") if link else None
 
 
-def _render_href(href: str) -> str:
+def _render_href(href: str, lossy: set) -> str:
+    if re.search(r"[<>\n]", href):
+        lossy.add("enlaces con < o > en la URL")
+        return href
     if re.fullmatch(_HREF, href):
         return href
     return f"<{href}>"  # espacios o paréntesis desequilibrados
@@ -364,7 +376,9 @@ def _inline(nodes: list[dict], lossy: set) -> str:
                 n = nodes[i]
                 group.append({**n, "marks": [mk for mk in n["marks"] if mk["type"] != "link"]})
                 i += 1
-            out.append(f"[{_inline(group, lossy)}]({_render_href(href)})")
+            if any("]" in n.get("text", "") for n in group if any(mk["type"] == "code" for mk in n["marks"])):
+                lossy.add("código con ] dentro de un enlace")
+            out.append(f"[{_inline(group, lossy)}]({_render_href(href, lossy)})")
             continue
         i += 1
         if kind == "text":
