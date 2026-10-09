@@ -219,6 +219,11 @@ def _text(text: str, marks: tuple) -> dict:
     return node
 
 
+def _match_href(m: re.Match) -> str:
+    """Destino del enlace de un match de _INLINE_RE (forma desnuda o <...>)."""
+    return m.group("link_href") if m.group("link_href") is not None else m.group("link_href_angle")
+
+
 def _parse_inline(text: str, marks: tuple = ()) -> list[dict]:
     nodes = []
     pending = ""
@@ -247,7 +252,7 @@ def _parse_inline(text: str, marks: tuple = ()) -> list[dict]:
             nodes.append(_text(code, link_marks + ({"type": "code"},)))
             continue
         if m.group("link_text"):
-            href = m.group("link_href") if m.group("link_href") is not None else m.group("link_href_angle")
+            href = _match_href(m)
             link = {"type": "link", "attrs": {"href": href}}
             nodes.extend(_parse_inline(m.group("link_text"), marks + (link,)))
             continue
@@ -356,7 +361,7 @@ def _render_href(href: str, lossy: set) -> str:
     # Forma desnuda o entre <...>: la primera que se vuelva a leer igual.
     for candidate in (href, f"<{href}>"):
         m = _INLINE_RE.fullmatch(f"[x]({candidate})")
-        if m and (m.group("link_href") if m.group("link_href") is not None else m.group("link_href_angle")) == href:
+        if m and _match_href(m) == href:
             return candidate
     lossy.add("URLs de enlace no representables en markdown")
     return href
