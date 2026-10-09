@@ -22,10 +22,12 @@ es opcional: si el .env no trae BITBUCKET_EMAIL/BITBUCKET_API_TOKEN/
 BITBUCKET_WORKSPACE, el servicio arranca igual solo con Jira y las tools
 de Bitbucket devuelven un error explicando qué falta.
 """
+import difflib
 import os
 
 from mcp.server.fastmcp import FastMCP
 
+from .adf import adf_to_markdown, markdown_to_adf
 from .bitbucket_client import BitbucketClient, BitbucketError
 from .config import Config, ConfigError
 from .jira_client import JiraClient, JiraError
@@ -77,6 +79,8 @@ def create_task(
     """Crea una tarea nueva en Jira en el proyecto configurado. Tras crearla
     la mueve automáticamente al estado JIRA_SELECTED_STATUS (por defecto
     'Selected for Development'), así no se queda parada en Backlog.
+
+    La descripción se pasa en markdown y se convierte a formato Jira.
 
     Si se pasa `parent_key` (ej. 'PROJ-123'), la tarea se crea como
     subtarea de ese issue. En ese caso, si no se especifica `issue_type`,
@@ -147,6 +151,123 @@ def start_task(issue_key: str, status: str | None = None) -> dict:
         return {"issue_key": issue_key, "status": resolved_status}
     except JiraError as e:
         return {"error": str(e)}
+
+
+@mcp.tool()
+def assign_task(issue_key: str) -> dict:
+    """Te asigna a ti (el usuario del gateway) un issue del proyecto
+    configurado que esté SIN asignar — por ejemplo una subtarea recién
+    creada, para poder hacer start_task después. No acepta otro
+    destinatario: no puede asignar a terceros ni quitarle la tarea a quien
+    ya la tenga (en ese caso devuelve error sin tocar nada). Si ya es tuya,
+    no hace nada y lo indica."""
+    try:
+        return _jira.assign_to_me(issue_key)
+    except JiraError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def get_task(issue_key: str) -> dict:
+    """Detalle de un issue del proyecto configurado: resumen, descripción
+    (en markdown), estado, persona asignada, labels y padre. Solo lectura.
+    Si la descripción tiene elementos sin equivalente en markdown
+    (menciones, tablas, adjuntos...), vienen aplanados a texto y se avisa
+    en `description_warning`."""
+    try:
+        task = _jira.get_issue(issue_key)
+    except JiraError as e:
+        return {"error": str(e)}
+
+    unsupported = task.pop("description_unsupported")
+    if unsupported:
+        task["description_warning"] = _unsupported_warning(unsupported)
+    return task
+
+
+def _unsupported_warning(unsupported: list[str]) -> str:
+    return (
+        "La descripción en Jira contiene elementos que no se pueden "
+        f"representar en markdown ({', '.join(unsupported)}); aquí aparecen "
+        "aplanados a texto. Si se reescribe la descripción, se perderán."
+    )
+
+
+def _diff(before: str, after: str) -> str:
+    return "\n".join(
+        difflib.unified_diff(
+            before.splitlines(), after.splitlines(), "antes", "después", lineterm=""
+        )
+    )
+
+
+@mcp.tool()
+def update_task(
+    issue_key: str,
+    summary: str | None = None,
+    description: str | None = None,
+    confirm: bool = False,
+) -> dict:
+    """Edita el resumen y/o la descripción de un issue del proyecto
+    configurado. La descripción se pasa en markdown (como devuelve
+    get_task) y se convierte a formato Jira; sustituye a la descripción
+    entera, así que parte de la actual (get_task) y modifica solo lo
+    necesario. Lo que no se pase no se toca.
+
+    IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
+    envía nada, solo devuelve una vista previa con el diff del antes y el
+    después — muéstrasela al usuario tal cual. Solo si el usuario la
+    aprueba, vuelve a llamar con confirm=True y los mismos datos para
+    guardarlo de verdad."""
+    if summary is None and description is None:
+        return {"error": "indica al menos summary o description"}
+    if summary is not None and not summary.strip():
+        return {"error": "el resumen no puede quedar vacío"}
+
+    try:
+        current = _jira.get_issue(issue_key)
+    except JiraError as e:
+        return {"error": str(e)}
+
+    changes = {}
+    if summary is not None and summary != current["summary"]:
+        changes["summary"] = {"before": current["summary"], "after": summary}
+    if description is not None:
+        # Normalizamos con la misma conversión que se enviará, para que el
+        # diff muestre exactamente lo que quedará en Jira.
+        after, _ = adf_to_markdown(markdown_to_adf(description))
+        if after != current["description"]:
+            changes["description_diff"] = _diff(current["description"], after)
+            if current["description_unsupported"]:
+                changes["description_warning"] = _unsupported_warning(
+                    current["description_unsupported"]
+                )
+
+    if not changes:
+        return {"issue_key": issue_key, "no_changes": True, "note": "No hay nada distinto de lo que ya hay en Jira."}
+
+    if not confirm:
+        return {
+            "preview": True,
+            "issue_key": issue_key,
+            **changes,
+            "note": (
+                "Nada se ha enviado a Jira todavía. Revisa este preview con "
+                "el usuario y, si lo aprueba, llama de nuevo con confirm=True "
+                "y los mismos datos."
+            ),
+        }
+
+    try:
+        _jira.update_issue(
+            issue_key,
+            summary if "summary" in changes else None,
+            description if "description_diff" in changes else None,
+        )
+    except JiraError as e:
+        return {"error": str(e)}
+
+    return {"updated": True, "issue_key": issue_key, "url": current["url"], **changes}
 
 
 @mcp.tool()

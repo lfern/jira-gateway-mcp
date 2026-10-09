@@ -1,9 +1,10 @@
 # jira-gateway
 
 MCP local que expone acciones al agente: `list_my_tasks`,
-`list_unassigned_tasks`, `list_task_comments`, `create_task` y `add_comment`
-(ambas con confirmación obligatoria en dos pasos), y `start_task` para
-Jira; y, si Bitbucket está configurado, `create_pull_request` (también con
+`list_unassigned_tasks`, `get_task`, `list_task_comments`, `create_task`,
+`update_task` y `add_comment` (las tres con confirmación obligatoria en dos
+pasos), `assign_task` (solo a ti y solo si está sin asignar) y `start_task`
+para Jira; y, si Bitbucket está configurado, `create_pull_request` (también con
 confirmación en dos pasos), `list_open_pull_requests` y `get_pull_request`
 para pull requests, más `run_pipeline` (confirmación en dos pasos, allowlist
 dura de patrones) y `get_pipeline` para lanzar pipelines custom de
@@ -368,28 +369,41 @@ falta ir a adivinarlo desde un 403 pelado.
    enseña el preview (proyecto, tipo, resumen, descripción, etiquetas) → si
    dices que sí, el agente vuelve a llamar a `create_task` con `confirm=True`
    y los mismos datos → ahí sí se crea. Acepta `labels` opcional (lista de
-   strings) para etiquetar el issue al crearlo.
+   strings) para etiquetar el issue al crearlo. La descripción va en
+   markdown (títulos, listas, código, negrita, enlaces...) y se convierte al
+   formato de Jira.
 3. "Selecciona la PROJ-123 para desarrollo" → `start_task` con
    `status="Selected for Development"` (o el nombre exacto de la transición
    intermedia de tu workflow).
 4. "Empieza la PROJ-123" → `start_task` sin `status` → transiciona al estado
    de "en progreso" configurado en `JIRA_IN_PROGRESS_STATUS`.
-5. "¿Qué comentarios tiene la PROJ-123?" → `list_task_comments` (solo
+5. "¿De qué va la PROJ-123?" → `get_task` (solo lectura: resumen,
+   descripción en markdown, estado, asignado, labels y padre).
+6. "Reescribe la descripción de la PROJ-123" → `update_task` (sin
+   `confirm`) → el agente te enseña el diff del antes y el después → si
+   dices que sí, vuelve a llamar con `confirm=True`. La descripción va en
+   markdown y sustituye a la entera; si la actual tiene cosas que markdown
+   no representa (menciones, tablas, adjuntos...), el preview avisa de que
+   se perderían.
+7. "Asígnate la PROJ-124" (p. ej. una subtarea recién creada) →
+   `assign_task` → te la asigna a ti si estaba sin asignar, y así ya puedes
+   hacer `start_task`.
+8. "¿Qué comentarios tiene la PROJ-123?" → `list_task_comments` (solo
    lectura, autor/fecha/texto en orden cronológico).
-6. "Comenta en la PROJ-123 que..." → `add_comment` (sin `confirm`) → el
+9. "Comenta en la PROJ-123 que..." → `add_comment` (sin `confirm`) → el
    agente te enseña el preview del texto → si dices que sí, vuelve a llamar
    con `confirm=True` para publicarlo.
-7. Claude Code crea la rama, desarrolla, comitea y hace push con sus
+10. Claude Code crea la rama, desarrolla, comitea y hace push con sus
    herramientas normales de bash/git — el gateway no interviene en nada de
    esto, y puede seguir leyendo `git log`/`git diff`/`git blame` sin
    restricción alguna.
-8. Si Bitbucket está configurado: "Abre el PR de esta rama" →
+11. Si Bitbucket está configurado: "Abre el PR de esta rama" →
    `create_pull_request` (sin `confirm`) → el agente te enseña el preview
    (repo, rama origen/destino, título, descripción completa) → si dices que
    sí, vuelve a llamar con `confirm=True` → lo crea, o te devuelve el que ya
    estuviera abierto para esa rama si lo había. Si no está configurado,
    abres el PR a mano como hasta ahora.
-9. "¿Qué PRs hay abiertos en refunder-react?" → `list_open_pull_requests`.
+12. "¿Qué PRs hay abiertos en refunder-react?" → `list_open_pull_requests`.
    "¿Cómo va el PR 87?" → `get_pull_request`. Ambas de solo lectura.
 
 Nota sobre la confirmación: además del preview de `create_task`, Claude Code
@@ -424,6 +438,14 @@ mensaje de un commit antes de confirmarlo.
 - **`create_task` nunca escribe en la primera llamada**: el flag `confirm`
   empieza en `False` por defecto, así que la ruta "segura" (preview) es la
   que sale sin que nadie tenga que acordarse de pedirla explícitamente.
+- **`assign_task` solo te asigna a ti, y solo tareas sin asignar**: la tool
+  no recibe ningún destinatario, así que no hay forma de asignar a otra
+  persona; y si la tarea ya es de alguien, falla sin tocar nada. Esa regla
+  la aplica el gateway, no depende de que el agente la respete.
+- **Solo issues del proyecto configurado**: además del prefijo de la clave,
+  `get_task`, `update_task`, `assign_task` y `start_task` comprueban el
+  proyecto que devuelve Jira, porque Jira sigue resolviendo claves antiguas
+  de issues movidos a otro proyecto.
 - **`start_task` solo transiciona issues asignados a ti**: comprueba el
   `assignee` contra el usuario del token antes de tocar nada. Si el issue es
   de otra persona (o está sin asignar), falla sin transicionar. Esto no

@@ -6,6 +6,7 @@ import re
 
 import requests
 
+from .adf import adf_to_markdown, markdown_to_adf
 from .config import Config
 
 _ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]*-\d+$")
@@ -71,24 +72,112 @@ class JiraClient:
             self._account_id = resp.json()["accountId"]
         return self._account_id
 
-    def assert_assigned_to_me(self, issue_key: str) -> None:
-        """Lanza JiraError si el issue no está asignado al usuario del token."""
+    def _get_issue_fields(self, issue_key: str, fields: list[str]) -> dict:
+        """Lee los campos indicados de un issue del proyecto configurado.
+
+        Además de validar el formato de la clave, comprueba el proyecto en la
+        respuesta: Jira sigue redirigiendo claves antiguas de issues movidos a
+        otro proyecto (PROJ-1 -> OTRO-7), así que el prefijo no basta."""
+        validate_issue_key(issue_key, self.cfg.project_key)
         resp = requests.get(
             f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}",
             headers=self._headers(),
-            params={"fields": "assignee"},
+            params={"fields": ",".join([*fields, "project"])},
             timeout=15,
         )
         if not resp.ok:
             raise JiraError(f"no pude leer {issue_key}: {resp.status_code}")
 
-        assignee = resp.json()["fields"].get("assignee")
+        body = resp.json()
+        project = (body["fields"].get("project") or {}).get("key")
+        if project != self.cfg.project_key:
+            raise JiraError(
+                f"{issue_key} se ha movido a {body.get('key')} (proyecto {project}), "
+                f"fuera del proyecto {self.cfg.project_key}"
+            )
+        if body.get("key", issue_key) != issue_key:
+            raise JiraError(f"{issue_key} ahora es {body['key']}: usa la clave actual")
+        return body["fields"]
+
+    def assert_assigned_to_me(self, issue_key: str) -> None:
+        """Lanza JiraError si el issue no está asignado al usuario del token."""
+        assignee = self._get_issue_fields(issue_key, ["assignee"]).get("assignee")
         if assignee is None or assignee.get("accountId") != self._current_account_id():
             who = assignee["displayName"] if assignee else "nadie (sin asignar)"
             raise JiraError(
                 f"{issue_key} no está asignada a ti (asignada a: {who}). "
-                "Asígnatela en Jira antes de empezarla."
+                "Asígnatela antes de empezarla (assign_task si está sin asignar)."
             )
+
+    def assign_to_me(self, issue_key: str) -> dict:
+        """Asigna el issue al usuario del token, y SOLO si está sin asignar.
+        No acepta otro destinatario a propósito: no hay forma de asignar a
+        terceros ni de quitarle una tarea a quien ya la tiene."""
+        assignee = self._get_issue_fields(issue_key, ["assignee"]).get("assignee")
+        me = self._current_account_id()
+        if assignee is not None:
+            if assignee.get("accountId") == me:
+                return {"issue_key": issue_key, "already_assigned": True}
+            raise JiraError(
+                f"{issue_key} ya está asignada a {assignee.get('displayName')}. "
+                "Solo puedo asignarte tareas que estén sin asignar."
+            )
+
+        resp = requests.put(
+            f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/assignee",
+            headers=self._headers(),
+            json={"accountId": me},
+            timeout=15,
+        )
+        if not resp.ok:
+            raise JiraError(f"Jira {resp.status_code} al asignar {issue_key}: {resp.text}")
+        return {"issue_key": issue_key, "assigned": True}
+
+    def get_issue(self, issue_key: str) -> dict:
+        fields = self._get_issue_fields(
+            issue_key, ["summary", "description", "status", "assignee", "labels", "parent"]
+        )
+        description, unsupported = adf_to_markdown(fields.get("description"))
+        assignee = fields.get("assignee")
+        parent = fields.get("parent")
+        return {
+            "key": issue_key,
+            "url": f"{self.cfg.jira_site_url}/browse/{issue_key}",
+            "summary": fields.get("summary", ""),
+            "description": description,
+            "description_unsupported": unsupported,
+            "status": (fields.get("status") or {}).get("name"),
+            "assignee": assignee.get("displayName") if assignee else None,
+            "labels": fields.get("labels") or [],
+            "parent": (
+                {"key": parent["key"], "summary": parent.get("fields", {}).get("summary")}
+                if parent
+                else None
+            ),
+        }
+
+    def update_issue(
+        self, issue_key: str, summary: str | None = None, description: str | None = None
+    ) -> None:
+        """Edita resumen y/o descripción (markdown). Requiere que el llamante
+        ya haya confirmado — esta función no pregunta nada, solo ejecuta."""
+        validate_issue_key(issue_key, self.cfg.project_key)
+        fields = {}
+        if summary is not None:
+            fields["summary"] = summary
+        if description is not None:
+            fields["description"] = markdown_to_adf(description)
+        if not fields:
+            raise JiraError("nada que actualizar")
+
+        resp = requests.put(
+            f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}",
+            headers=self._headers(),
+            json={"fields": fields},
+            timeout=15,
+        )
+        if not resp.ok:
+            raise JiraError(f"Jira {resp.status_code} al actualizar {issue_key}: {resp.text}")
 
     def create_issue(
         self,
@@ -104,7 +193,7 @@ class JiraClient:
             "fields": {
                 "project": {"key": self.cfg.project_key},
                 "summary": summary,
-                "description": _text_to_adf(description),
+                "description": markdown_to_adf(description),
                 "issuetype": {"name": issue_type},
                 "labels": labels or [],
             }
