@@ -78,6 +78,13 @@ def test_get_issue_rejects_issue_moved_to_other_project(client):
         client.get_issue("PROJ-7")
 
 
+@responses.activate
+def test_get_issue_rejects_renamed_key_in_same_project(client):
+    responses.add(responses.GET, f"{BASE}/issue/PROJ-7", json=_issue(key="PROJ-9"))
+    with pytest.raises(JiraError, match="ahora es PROJ-9"):
+        client.get_issue("PROJ-7")
+
+
 # --- assign_to_me --------------------------------------------------------------
 
 
@@ -199,3 +206,42 @@ def test_update_task_warns_when_description_would_lose_elements(server):
 
 def test_update_task_requires_something_to_change(server):
     assert "error" in server.update_task("PROJ-7")
+
+
+@responses.activate
+def test_get_task_tool_maps_unsupported_to_warning(server):
+    mention = {"type": "mention", "attrs": {"id": "1", "text": "@Ana"}}
+    _add_issue(description={"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [mention]}]})
+
+    result = server.get_task("PROJ-7")
+
+    assert "description_unsupported" not in result
+    assert "mention" in result["description_warning"]
+    assert result["description"] == "@Ana"
+
+
+@responses.activate
+def test_get_task_tool_without_unsupported_has_no_warning(server):
+    _add_issue()
+    result = server.get_task("PROJ-7")
+    assert "description_warning" not in result
+    assert "description_unsupported" not in result
+
+
+def test_get_task_tool_wraps_errors(server):
+    assert "no pertenece" in server.get_task("OTRO-1")["error"]
+
+
+@responses.activate
+def test_assign_task_tool_success(server):
+    _add_issue(assignee=None)
+    _add_me()
+    responses.add(responses.PUT, f"{BASE}/issue/PROJ-7/assignee", status=204)
+    assert server.assign_task("PROJ-7") == {"issue_key": "PROJ-7", "assigned": True}
+
+
+@responses.activate
+def test_assign_task_tool_wraps_refusal(server):
+    _add_issue(assignee={"accountId": "acc-ana", "displayName": "Ana"})
+    _add_me()
+    assert "ya está asignada a Ana" in server.assign_task("PROJ-7")["error"]

@@ -442,6 +442,8 @@ mensaje de un commit antes de confirmarlo.
   no recibe ningún destinatario, así que no hay forma de asignar a otra
   persona; y si la tarea ya es de alguien, falla sin tocar nada. Esa regla
   la aplica el gateway, no depende de que el agente la respete.
+  (Jira no tiene asignación condicional: queda una ventana de milisegundos
+  entre comprobar y asignar en la que no se puede garantizar al 100%.)
 - **Solo issues del proyecto configurado**: además del prefijo de la clave,
   `get_task`, `update_task`, `assign_task` y `start_task` comprueban el
   proyecto que devuelve Jira, porque Jira sigue resolviendo claves antiguas

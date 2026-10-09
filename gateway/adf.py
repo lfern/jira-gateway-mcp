@@ -13,7 +13,7 @@ esos elementos se perderían.
 import re
 import textwrap
 
-_FENCE_RE = re.compile(r"^\s*(```|~~~)\s*([\w+#.-]*)\s*$")
+_FENCE_RE = re.compile(r"^(\s*)(`{3,}|~{3,})\s*([\w+#.-]*)\s*$")
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$")
 _RULE_RE = re.compile(r"^\s{0,3}([-*_])(?:\s*\1){2,}\s*$")
 _LIST_RE = re.compile(r"^(\s*)([-*+]|\d{1,9}[.)])(?:\s+(.*))?$")
@@ -27,10 +27,14 @@ def _span(delim: str, name: str, edge: str = r"\s") -> str:
     return rf"{delim}(?P<{name}>(?![{edge}])(?:\\.|[^\\])*?(?:\\.|[^\\{edge}])){delim}"
 
 
+# Destino de enlace sin <>: sin espacios y con paréntesis equilibrados (un nivel).
+_HREF = r"(?:[^()\s]|\([^()\s]*\))+"
+
 _INLINE_RE = re.compile(
     r"(?P<escape>\\[!-/:-@\[-`{-~])"
     r"|(?<!`)(?P<code>`+)(?P<code_text>[^`](?:.*?[^`])?)(?P=code)(?!`)"
-    r"|\[(?P<link_text>[^\]]+)\]\((?P<link_href>[^)\s]+)\)"
+    r"|\[(?P<link_text>(?:\\.|[^\]\\])+)\]"
+    r"\((?:<(?P<link_href_angle>[^<>\n]*)>|(?P<link_href>" + _HREF + r"))\)"
     + "|" + _span(r"\*\*", "strong")
     + "|" + r"(?<!\w)(?:" + _span("__", "strong2") + r")(?!\w)"
     + "|" + _span("~~", "strike")
@@ -54,6 +58,14 @@ def _indent(line: str) -> int:
     return len(expanded) - len(expanded.lstrip())
 
 
+def _strip_indent(line: str, n: int) -> str:
+    """Quita hasta `n` caracteres de sangría del principio (sin tocar el resto)."""
+    stripped = 0
+    while stripped < n and line[stripped : stripped + 1] in (" ", "\t"):
+        stripped += 1
+    return line[stripped:]
+
+
 def _starts_block(line: str) -> bool:
     return bool(
         _FENCE_RE.match(line)
@@ -74,14 +86,18 @@ def _parse_blocks(lines: list[str]) -> list[dict]:
             continue
 
         if m := _FENCE_RE.match(line):
-            fence, language = m.group(1), m.group(2)
+            indent, fence, language = _indent(m.group(1)), m.group(2), m.group(3)
             body = []
             i += 1
-            while i < len(lines) and lines[i].strip() != fence:
+            # Cierra una valla del mismo carácter y al menos igual de larga.
+            while i < len(lines) and not re.fullmatch(
+                rf"\s*{re.escape(fence[0])}{{{len(fence)},}}\s*", lines[i]
+            ):
                 body.append(lines[i])
                 i += 1
             i += 1  # salta el cierre (o el final, si no lo había)
-            text = textwrap.dedent("\n".join(body))
+            # Solo se quita la sangría de la propia valla, no la del código.
+            text = "\n".join(_strip_indent(b, indent) for b in body)
             node = {"type": "codeBlock", "content": [{"type": "text", "text": text}] if text else []}
             if language:
                 node["attrs"] = {"language": language}
@@ -225,7 +241,8 @@ def _parse_inline(text: str, marks: tuple = ()) -> list[dict]:
             nodes.append(_text(code, link_marks + ({"type": "code"},)))
             continue
         if m.group("link_text"):
-            link = {"type": "link", "attrs": {"href": m.group("link_href")}}
+            href = m.group("link_href") if m.group("link_href") is not None else m.group("link_href_angle")
+            link = {"type": "link", "attrs": {"href": href}}
             nodes.extend(_parse_inline(m.group("link_text"), marks + (link,)))
             continue
         for name, mark in (("strong", "strong"), ("strong2", "strong"), ("strike", "strike"), ("em", "em"), ("em2", "em")):
@@ -263,9 +280,20 @@ def _block(node: dict, lossy: set) -> str:
     attrs = node.get("attrs") or {}
 
     if kind == "paragraph":
-        return "\n".join(_escape_line(line) for line in _inline(content, lossy).split("\n"))
+        lines = _inline(content, lossy).split("\n")
+        if any(not line.strip() for line in lines) and len(lines) > 1:
+            lossy.add("saltos de línea consecutivos")
+        if any(line[:1].isspace() for line in lines):
+            lossy.add("espacios al inicio de línea")
+        return "\n".join(_escape_line(line) for line in lines)
     if kind == "heading":
-        return "#" * attrs.get("level", 1) + " " + _inline(content, lossy).replace("\n", " ")
+        text = _inline(content, lossy)
+        if "\n" in text:
+            lossy.add("saltos de línea en títulos")
+        text = text.replace("\n", " ").strip()
+        if text.endswith("#"):
+            text = text[:-1] + "\\#"  # si no, se leería como cierre del título
+        return "#" * attrs.get("level", 1) + " " + text
     if kind == "bulletList":
         return "\n".join(_list_item(item, "- ", lossy) for item in content)
     if kind == "orderedList":
@@ -273,7 +301,8 @@ def _block(node: dict, lossy: set) -> str:
         return "\n".join(_list_item(item, f"{start + n}. ", lossy) for n, item in enumerate(content))
     if kind == "codeBlock":
         text = "".join(c.get("text", "") for c in content)
-        return f"```{attrs.get('language') or ''}\n{text}\n```"
+        fence = "`" * max(3, max((len(r) for r in re.findall(r"`+", text)), default=0) + 1)
+        return f"{fence}{attrs.get('language') or ''}\n{text}\n{fence}"
     if kind == "blockquote":
         inner = _blocks(content, lossy, "\n\n")
         return "\n".join(f"> {line}" if line else ">" for line in inner.split("\n"))
@@ -314,6 +343,12 @@ def _link_href(node: dict) -> str | None:
     return link.get("attrs", {}).get("href", "") if link else None
 
 
+def _render_href(href: str) -> str:
+    if re.fullmatch(_HREF, href):
+        return href
+    return f"<{href}>"  # espacios o paréntesis desequilibrados
+
+
 def _inline(nodes: list[dict], lossy: set) -> str:
     out = []
     i = 0
@@ -329,7 +364,7 @@ def _inline(nodes: list[dict], lossy: set) -> str:
                 n = nodes[i]
                 group.append({**n, "marks": [mk for mk in n["marks"] if mk["type"] != "link"]})
                 i += 1
-            out.append(f"[{_inline(group, lossy)}]({href})")
+            out.append(f"[{_inline(group, lossy)}]({_render_href(href)})")
             continue
         i += 1
         if kind == "text":
@@ -376,7 +411,7 @@ def _render_text(node: dict, lossy: set) -> str:
 def _escape(text: str) -> str:
     out = []
     for n, ch in enumerate(text):
-        if ch in "\\`*[~":
+        if ch in "\\`*[]~":
             out.append("\\" + ch)
         elif ch == "_" and not (text[n - 1 : n].isalnum() and text[n + 1 : n + 2].isalnum()):
             out.append("\\_")  # snake_case se queda tal cual; _esto_ no

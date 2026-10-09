@@ -112,7 +112,12 @@ class JiraClient:
     def assign_to_me(self, issue_key: str) -> dict:
         """Asigna el issue al usuario del token, y SOLO si está sin asignar.
         No acepta otro destinatario a propósito: no hay forma de asignar a
-        terceros ni de quitarle una tarea a quien ya la tiene."""
+        terceros ni de quitarle una tarea a quien ya la tiene.
+
+        Límite conocido: Jira no tiene asignación condicional, así que entre
+        la lectura y el PUT queda una ventana (de milisegundos) en la que, si
+        otra persona se la asigna justo entonces, el PUT la pisaría. Releer
+        después no lo detecta (ya saldrías tú), así que no se intenta."""
         assignee = self._get_issue_fields(issue_key, ["assignee"]).get("assignee")
         me = self._current_account_id()
         if assignee is not None:

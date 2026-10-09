@@ -120,6 +120,11 @@ def test_marks_move_whitespace_outside_delimiters():
         "Texto simple",
         "línea uno\nlínea dos\n\notro párrafo",
         "# Título\n\n## Subtítulo con `code`",
+        "[Foo](https://en.wikipedia.org/wiki/Foo_(bar)) y [con \\] dentro](https://x.io)",
+        "[espacio](<https://x.io/a b>)",
+        "````\n```\ndentro\n```\n````",
+        "```\n    def f():\n\treturn 1\n```",
+        "# C \\#",
         "**dos** **negritas** y [un](https://a.io) [enlace](https://b.io)",
         "**negrita**, *cursiva*, **_ambas_**, ~~tachado~~ y [enlace **fuerte**](https://x.io)",
         "- uno\n- dos\n  - dos.a\n  - dos.b\n- tres",
@@ -130,7 +135,7 @@ def test_marks_move_whitespace_outside_delimiters():
         "antes\n\n---\n\ndespués",
         "mi_variable y \\_esto\\_ no es cursiva, 2 \\* 3",
         "\\# no es título\n\\- ni lista\n1\\. ni numerada\n\\> ni cita",
-        "precio: \\[WIP] sin enlace",
+        "precio: \\[WIP\\] sin enlace",
     ],
 )
 def test_roundtrip_markdown(markdown):
@@ -148,3 +153,19 @@ def test_roundtrip_literal_text(text):
     doc = _doc(_p(_t(text)))
     md, _ = adf_to_markdown(doc)
     assert markdown_to_adf(md) == doc
+
+
+@pytest.mark.parametrize(
+    "doc, lost",
+    [
+        (_doc(_p(_t("  sangría"))), "espacios al inicio de línea"),
+        (_doc(_p(_t("a"), {"type": "hardBreak"}, {"type": "hardBreak"}, _t("b"))), "saltos de línea consecutivos"),
+        (
+            _doc({"type": "heading", "attrs": {"level": 1}, "content": [_t("a"), {"type": "hardBreak"}, _t("b")]}),
+            "saltos de línea en títulos",
+        ),
+    ],
+)
+def test_lossy_whitespace_is_reported(doc, lost):
+    _, unsupported = adf_to_markdown(doc)
+    assert lost in unsupported
