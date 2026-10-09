@@ -122,6 +122,7 @@ def test_marks_move_whitespace_outside_delimiters():
         "# Título\n\n## Subtítulo con `code`",
         "[Foo](https://en.wikipedia.org/wiki/Foo_(bar)) y [con \\] dentro](https://x.io)",
         "[espacio](<https://x.io/a b>)",
+        "[menor](https://x.io/?a<b) y [mayor](https://x.io/a>b)",
         "````\n```\ndentro\n```\n````",
         "```\n    def f():\n\treturn 1\n```",
         "- item\n\n  ```\n  \tcon tab\n  ```",
@@ -180,7 +181,7 @@ def test_tab_indented_fence_keeps_code_indentation():
 @pytest.mark.parametrize(
     "doc, lost",
     [
-        (_doc(_p(_t("x", {"type": "link", "attrs": {"href": "<foo>"}}))), "enlaces con < o > en la URL"),
+        (_doc(_p(_t("x", {"type": "link", "attrs": {"href": "<foo>"}}))), "URLs de enlace no representables en markdown"),
         (
             _doc(_p(_t("a]b", "code", {"type": "link", "attrs": {"href": "https://x.io"}}))),
             "código con ] dentro de un enlace",

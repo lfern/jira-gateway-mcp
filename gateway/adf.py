@@ -353,12 +353,12 @@ def _link_href(node: dict) -> str | None:
 
 
 def _render_href(href: str, lossy: set) -> str:
-    if re.search(r"[<>\n]", href):
-        lossy.add("enlaces con < o > en la URL")
+    if re.fullmatch(_HREF, href) and not href.startswith("<"):
         return href
-    if re.fullmatch(_HREF, href):
-        return href
-    return f"<{href}>"  # espacios o paréntesis desequilibrados
+    if not re.search(r"[<>\n]", href):
+        return f"<{href}>"  # espacios o paréntesis desequilibrados
+    lossy.add("URLs de enlace no representables en markdown")
+    return href
 
 
 def _inline(nodes: list[dict], lossy: set) -> str:
