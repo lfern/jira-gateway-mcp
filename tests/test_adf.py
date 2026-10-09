@@ -123,6 +123,7 @@ def test_marks_move_whitespace_outside_delimiters():
         "[Foo](https://en.wikipedia.org/wiki/Foo_(bar)) y [con \\] dentro](https://x.io)",
         "[espacio](<https://x.io/a b>)",
         "[menor](https://x.io/?a<b) y [mayor](https://x.io/a>b)",
+        "[raro](<foo) y [más raro](<a>b)",
         "````\n```\ndentro\n```\n````",
         "```\n    def f():\n\treturn 1\n```",
         "- item\n\n  ```\n  \tcon tab\n  ```",

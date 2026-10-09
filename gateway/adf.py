@@ -353,10 +353,11 @@ def _link_href(node: dict) -> str | None:
 
 
 def _render_href(href: str, lossy: set) -> str:
-    if re.fullmatch(_HREF, href) and not href.startswith("<"):
-        return href
-    if not re.search(r"[<>\n]", href):
-        return f"<{href}>"  # espacios o paréntesis desequilibrados
+    # Forma desnuda o entre <...>: la primera que se vuelva a leer igual.
+    for candidate in (href, f"<{href}>"):
+        m = _INLINE_RE.fullmatch(f"[x]({candidate})")
+        if m and (m.group("link_href") if m.group("link_href") is not None else m.group("link_href_angle")) == href:
+            return candidate
     lossy.add("URLs de enlace no representables en markdown")
     return href
 
