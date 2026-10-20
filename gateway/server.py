@@ -30,7 +30,14 @@ from mcp.server.fastmcp import FastMCP
 from .adf import adf_to_markdown, markdown_to_adf
 from .bitbucket_client import BitbucketClient, BitbucketError
 from .config import Config, ConfigError
-from .jira_client import JiraClient, JiraError, validate_labels
+from .jira_client import (
+    JiraClient,
+    JiraError,
+    format_duration,
+    parse_duration,
+    parse_started,
+    validate_labels,
+)
 
 mcp = FastMCP(
     "jira-gateway",
@@ -339,6 +346,171 @@ def add_comment(issue_key: str, body: str, confirm: bool = False) -> dict:
         return {"error": str(e)}
 
     return {"created": True, "issue_key": issue_key, **result}
+
+
+_WORKLOG_ESTIMATE_NOTE = (
+    "Jira restará este tiempo de la estimación restante de la tarea, igual "
+    "que al apuntarlo desde la web."
+)
+
+
+@mcp.tool()
+def list_worklogs(issue_key: str) -> list[dict]:
+    """Lista el tiempo apuntado en un issue del proyecto configurado: id,
+    autor, si es tuyo (`mine`), inicio, duración y comentario. Solo
+    lectura. El `id` es el que piden update_worklog y delete_worklog."""
+    try:
+        return _jira.list_worklogs(issue_key)
+    except JiraError as e:
+        return [{"error": str(e)}]
+
+
+@mcp.tool()
+def add_worklog(
+    issue_key: str,
+    time_spent: str,
+    started: str | None = None,
+    comment: str = "",
+    confirm: bool = False,
+) -> dict:
+    """Apunta tiempo dedicado en cualquier issue del proyecto configurado.
+
+    `time_spent` en horas y/o minutos: '2h', '45m', '1h 30m' o '1.5h' (sin
+    días: dependen de la config de Jira). Máximo 12h por entrada.
+    `started` es cuándo empezaste: 'YYYY-MM-DD' (se toma a las 09:00) o
+    'YYYY-MM-DDTHH:MM', en hora local; sin valor, ahora. No admite fechas
+    futuras. Jira resta el tiempo de la estimación restante de la tarea,
+    igual que al apuntarlo desde la web.
+
+    IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
+    envía nada, solo devuelve una vista previa — muéstrasela al usuario tal
+    cual. Solo si el usuario la aprueba, vuelve a llamar con confirm=True y
+    los mismos datos para guardarlo de verdad."""
+    try:
+        seconds = parse_duration(time_spent)
+        resolved_started = parse_started(started)
+    except JiraError as e:
+        return {"error": str(e)}
+
+    if not confirm:
+        return {
+            "preview": True,
+            "issue_key": issue_key,
+            "time_spent": format_duration(seconds),
+            "started": resolved_started,
+            "comment": comment,
+            "note": (
+                "Nada se ha enviado a Jira todavía. Revisa este preview con "
+                "el usuario y, si lo aprueba, llama de nuevo con confirm=True "
+                f"y los mismos datos. {_WORKLOG_ESTIMATE_NOTE}"
+            ),
+        }
+
+    try:
+        result = _jira.add_worklog(issue_key, seconds, resolved_started, comment)
+    except JiraError as e:
+        return {"error": str(e)}
+
+    return {"created": True, "issue_key": issue_key, **result, "time_spent": format_duration(seconds)}
+
+
+@mcp.tool()
+def update_worklog(
+    issue_key: str,
+    worklog_id: str,
+    time_spent: str | None = None,
+    started: str | None = None,
+    comment: str | None = None,
+    confirm: bool = False,
+) -> dict:
+    """Corrige una entrada de tiempo TUYA (duración, inicio y/o comentario).
+    Si la entrada es de otra persona, devuelve error sin tocar nada. Mismo
+    formato que add_worklog; lo que no se pase no se toca. Saca el
+    `worklog_id` de list_worklogs.
+
+    IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
+    envía nada, solo devuelve una vista previa con el antes y el después —
+    muéstrasela al usuario tal cual. Solo si el usuario la aprueba, vuelve a
+    llamar con confirm=True y los mismos datos para guardarlo de verdad."""
+    if time_spent is None and started is None and comment is None:
+        return {"error": "indica al menos time_spent, started o comment"}
+    try:
+        seconds = parse_duration(time_spent) if time_spent is not None else None
+        resolved_started = parse_started(started) if started is not None else None
+        current = _jira.get_my_worklog(issue_key, worklog_id)
+    except JiraError as e:
+        return {"error": str(e)}
+
+    changes = {}
+    if seconds is not None and seconds != current["time_spent_seconds"]:
+        changes["time_spent"] = {"before": current["time_spent"], "after": format_duration(seconds)}
+    if resolved_started is not None and resolved_started != current["started"]:
+        changes["started"] = {"before": current["started"], "after": resolved_started}
+    if comment is not None and comment != current["comment"]:
+        changes["comment"] = {"before": current["comment"], "after": comment}
+
+    if not changes:
+        return {"issue_key": issue_key, "worklog_id": current["id"], "no_changes": True}
+
+    if not confirm:
+        return {
+            "preview": True,
+            "issue_key": issue_key,
+            "worklog_id": current["id"],
+            **changes,
+            "note": (
+                "Nada se ha enviado a Jira todavía. Revisa este preview con "
+                "el usuario y, si lo aprueba, llama de nuevo con confirm=True "
+                "y los mismos datos."
+            ),
+        }
+
+    try:
+        _jira.update_worklog(
+            issue_key,
+            current["id"],
+            seconds if "time_spent" in changes else None,
+            resolved_started if "started" in changes else None,
+            comment if "comment" in changes else None,
+        )
+    except JiraError as e:
+        return {"error": str(e)}
+
+    return {"updated": True, "issue_key": issue_key, "worklog_id": current["id"], **changes}
+
+
+@mcp.tool()
+def delete_worklog(issue_key: str, worklog_id: str, confirm: bool = False) -> dict:
+    """Borra una entrada de tiempo TUYA (p. ej. apuntada en la tarea
+    equivocada). Si la entrada es de otra persona, devuelve error sin tocar
+    nada. Saca el `worklog_id` de list_worklogs.
+
+    IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
+    borra nada, solo devuelve la entrada que se borraría — muéstrasela al
+    usuario tal cual. Solo si el usuario lo aprueba, vuelve a llamar con
+    confirm=True para borrarla de verdad."""
+    try:
+        current = _jira.get_my_worklog(issue_key, worklog_id)
+    except JiraError as e:
+        return {"error": str(e)}
+
+    if not confirm:
+        return {
+            "preview": True,
+            "issue_key": issue_key,
+            "worklog": current,
+            "note": (
+                "Nada se ha borrado todavía. Revisa esta entrada con el "
+                "usuario y, si lo aprueba, llama de nuevo con confirm=True."
+            ),
+        }
+
+    try:
+        _jira.delete_worklog(issue_key, current["id"])
+    except JiraError as e:
+        return {"error": str(e)}
+
+    return {"deleted": True, "issue_key": issue_key, "worklog": current}
 
 
 def _bitbucket_unavailable() -> dict:

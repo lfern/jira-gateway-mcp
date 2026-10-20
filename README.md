@@ -3,8 +3,10 @@
 MCP local que expone acciones al agente: `list_my_tasks`,
 `list_unassigned_tasks`, `get_task`, `list_task_comments`, `create_task`,
 `update_task` y `add_comment` (las tres con confirmación obligatoria en dos
-pasos), `assign_task` (solo a ti y solo si está sin asignar), `start_task` y
-`transition_task` para Jira; y, si Bitbucket está configurado, `create_pull_request` (también con
+pasos), `assign_task` (solo a ti y solo si está sin asignar), `start_task`,
+`transition_task`, y `list_worklogs`, `add_worklog`, `update_worklog` y
+`delete_worklog` para el tiempo dedicado (las de escritura con confirmación
+en dos pasos; corregir y borrar, solo tus entradas) para Jira; y, si Bitbucket está configurado, `create_pull_request` (también con
 confirmación en dos pasos), `list_open_pull_requests` y `get_pull_request`
 para pull requests, más `run_pipeline` (confirmación en dos pasos, allowlist
 dura de patrones) y `get_pipeline` para lanzar pipelines custom de
@@ -406,17 +408,26 @@ falta ir a adivinarlo desde un 403 pelado.
 9. "Comenta en la PROJ-123 que..." → `add_comment` (sin `confirm`) → el
    agente te enseña el preview del texto → si dices que sí, vuelve a llamar
    con `confirm=True` para publicarlo.
-10. Claude Code crea la rama, desarrolla, comitea y hace push con sus
+10. "Apunta 1h 30m en la PROJ-123 de ayer" → `add_worklog` con
+   `time_spent="1h 30m"` y `started="YYYY-MM-DD"` (sin `confirm`) → preview
+   → `confirm=True`. Solo horas y minutos (`2h`, `45m`, `1h 30m`, `1.5h`),
+   máximo 12h por entrada y nunca en el futuro. "¿Cuánto tiempo hay
+   apuntado en la PROJ-123?" → `list_worklogs` (solo lectura; marca las
+   entradas tuyas con `mine`). Para corregir o borrar una entrada,
+   `update_worklog` / `delete_worklog` con su `worklog_id` y el mismo
+   preview → confirm. Jira resta el tiempo de la estimación restante, igual
+   que al apuntarlo desde la web.
+11. Claude Code crea la rama, desarrolla, comitea y hace push con sus
    herramientas normales de bash/git — el gateway no interviene en nada de
    esto, y puede seguir leyendo `git log`/`git diff`/`git blame` sin
    restricción alguna.
-11. Si Bitbucket está configurado: "Abre el PR de esta rama" →
+12. Si Bitbucket está configurado: "Abre el PR de esta rama" →
    `create_pull_request` (sin `confirm`) → el agente te enseña el preview
    (repo, rama origen/destino, título, descripción completa) → si dices que
    sí, vuelve a llamar con `confirm=True` → lo crea, o te devuelve el que ya
    estuviera abierto para esa rama si lo había. Si no está configurado,
    abres el PR a mano como hasta ahora.
-12. "¿Qué PRs hay abiertos en refunder-react?" → `list_open_pull_requests`.
+13. "¿Qué PRs hay abiertos en refunder-react?" → `list_open_pull_requests`.
    "¿Cómo va el PR 87?" → `get_pull_request`. Ambas de solo lectura.
 
 Nota sobre la confirmación: además del preview de `create_task`, Claude Code
@@ -464,6 +475,12 @@ mensaje de un commit antes de confirmarlo.
   `get_task`, `update_task`, `assign_task` y `start_task` comprueban el
   proyecto que devuelve Jira, porque Jira sigue resolviendo claves antiguas
   de issues movidos a otro proyecto.
+- **Tiempo dedicado: apuntar en cualquier tarea, corregir y borrar solo lo
+  tuyo.** `update_worklog` y `delete_worklog` comprueban el autor de la
+  entrada contra el usuario del token antes de tocar nada. La duración la
+  interpreta el gateway (no Jira), con un máximo de 12h por entrada, para
+  que el preview muestre exactamente lo que se guarda y un "30h" en vez
+  de "3h" no pase.
 - **`start_task` y `transition_task` solo transicionan issues asignados a
   ti**, y si defines `JIRA_ALLOWED_STATUSES`, solo a esos estados (así el
   agente no puede cerrar ni rechazar tareas). Comprueban el

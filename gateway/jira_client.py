@@ -3,6 +3,7 @@ Todo lo que este módulo NO expone, el agente no puede hacerlo.
 No hay ningún método "raw request" ni JQL libre.
 """
 import re
+from datetime import datetime, time
 
 import requests
 
@@ -18,6 +19,21 @@ _STATUS_NAME_RE = re.compile(r"^[\w][\w .()/-]{0,59}$")
 
 # Las etiquetas de Jira no admiten espacios.
 _LABEL_RE = re.compile(r"^[^\s]{1,255}$")
+
+# Duración de un worklog: "2h", "45m", "1h 30m", "1.5h". Sin días ni
+# semanas a propósito: en Jira dependen de la config del sitio (1d = 8h o
+# no), y así el preview muestra exactamente lo que se guarda.
+_DURATION_PART_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*([hm])")
+_DURATION_RE = re.compile(r"^\s*(?:\d+(?:[.,]\d+)?\s*[hm]\s*)+$")
+# Tope por entrada para cazar errores tipo "30h" en vez de "3h".
+MAX_WORKLOG_SECONDS = 12 * 3600
+
+# Jira usa ids numéricos para los worklogs.
+_WORKLOG_ID_RE = re.compile(r"^\d{1,20}$")
+
+# Por defecto Jira resta lo apuntado de la estimación restante: igual que
+# al apuntar horas desde la web, así que el equipo no nota diferencia.
+_ADJUST_ESTIMATE = {"adjustEstimate": "auto"}
 
 
 class JiraError(Exception):
@@ -40,6 +56,57 @@ def validate_labels(labels: list[str]) -> None:
     for label in labels:
         if not isinstance(label, str) or not _LABEL_RE.match(label):
             raise JiraError(f"etiqueta inválida: {label!r} (sin espacios, 1-255 caracteres)")
+
+
+def parse_duration(text: str) -> int:
+    """'1h 30m' -> 5400. Lanza JiraError si el formato no es válido, si da
+    menos de un minuto o si pasa de MAX_WORKLOG_SECONDS."""
+    if not isinstance(text, str) or not _DURATION_RE.match(text.lower()):
+        raise JiraError(f"duración con formato inválido: {text!r} (usa '2h', '45m' o '1h 30m')")
+    seconds = 0
+    for amount, unit in _DURATION_PART_RE.findall(text.lower()):
+        seconds += round(float(amount.replace(",", ".")) * (3600 if unit == "h" else 60))
+    if seconds < 60:
+        raise JiraError(f"duración demasiado corta: {text!r} (mínimo 1m)")
+    if seconds > MAX_WORKLOG_SECONDS:
+        raise JiraError(
+            f"duración demasiado larga: {text!r} (máximo {format_duration(MAX_WORKLOG_SECONDS)} por entrada)"
+        )
+    return seconds
+
+
+def format_duration(seconds: int) -> str:
+    """5400 -> '1h 30m'."""
+    hours, minutes = divmod(round(seconds / 60), 60)
+    return " ".join(part for part in (f"{hours}h" if hours else "", f"{minutes}m" if minutes else "") if part) or "0m"
+
+
+def parse_started(text: str | None, now: datetime | None = None) -> str:
+    """Fecha de inicio de un worklog en el formato que pide Jira. Acepta
+    'YYYY-MM-DD' (se toma a las 09:00) o 'YYYY-MM-DDTHH:MM', en hora local
+    si no trae zona. Sin valor, ahora. No admite fechas futuras."""
+    now = now or datetime.now().astimezone()
+    if text is None:
+        started = now
+    else:
+        try:
+            started = datetime.fromisoformat(text)
+        except (TypeError, ValueError):
+            raise JiraError(f"fecha con formato inválido: {text!r} (usa 'YYYY-MM-DD' o 'YYYY-MM-DDTHH:MM')")
+        if len(text) == 10:
+            started = datetime.combine(started.date(), time(9, 0))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=now.tzinfo)
+        if started > now:
+            raise JiraError(f"la fecha no puede ser futura: {text!r}")
+    return started.strftime("%Y-%m-%dT%H:%M:%S.000%z")
+
+
+def validate_worklog_id(worklog_id: str) -> str:
+    worklog_id = str(worklog_id)
+    if not _WORKLOG_ID_RE.match(worklog_id):
+        raise JiraError(f"worklog_id inválido: {worklog_id!r}")
+    return worklog_id
 
 
 def _transition_destination(transition: dict) -> str:
@@ -386,3 +453,114 @@ class JiraClient:
             "id": comment["id"],
             "url": f"{self.cfg.jira_site_url}/browse/{issue_key}?focusedCommentId={comment['id']}",
         }
+
+    # --- worklogs (tiempo dedicado) -------------------------------------------
+    #
+    # Se puede apuntar tiempo en cualquier issue del proyecto, pero solo se
+    # pueden editar o borrar las entradas propias: la autoría se comprueba
+    # contra el usuario del token antes de tocar nada.
+
+    def _compact_worklog(self, w: dict) -> dict:
+        author = w.get("author") or {}
+        return {
+            "id": w["id"],
+            "author": author.get("displayName"),
+            "mine": author.get("accountId") == self._current_account_id(),
+            "started": w.get("started"),
+            "time_spent": format_duration(w.get("timeSpentSeconds", 0)),
+            "time_spent_seconds": w.get("timeSpentSeconds", 0),
+            "comment": _adf_to_text(w["comment"]).strip() if w.get("comment") else "",
+        }
+
+    def list_worklogs(self, issue_key: str) -> list[dict]:
+        self._get_issue_fields(issue_key, [])
+        resp = requests.get(
+            f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/worklog",
+            headers=self._headers(),
+            timeout=15,
+        )
+        if not resp.ok:
+            raise JiraError(f"no pude leer el tiempo apuntado en {issue_key}: {resp.status_code}")
+        return [self._compact_worklog(w) for w in resp.json().get("worklogs", [])]
+
+    def get_my_worklog(self, issue_key: str, worklog_id: str) -> dict:
+        """Lee un worklog y lanza JiraError si no es del usuario del token."""
+        worklog_id = validate_worklog_id(worklog_id)
+        self._get_issue_fields(issue_key, [])
+        resp = requests.get(
+            f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/worklog/{worklog_id}",
+            headers=self._headers(),
+            timeout=15,
+        )
+        if not resp.ok:
+            raise JiraError(f"no pude leer el worklog {worklog_id} de {issue_key}: {resp.status_code}")
+        worklog = self._compact_worklog(resp.json())
+        if not worklog["mine"]:
+            raise JiraError(
+                f"el worklog {worklog_id} de {issue_key} es de {worklog['author']}. "
+                "Solo puedes editar o borrar tus propias entradas."
+            )
+        return worklog
+
+    def add_worklog(self, issue_key: str, seconds: int, started: str, comment: str = "") -> dict:
+        """Apunta tiempo. Requiere que el llamante ya haya confirmado —
+        esta función no pregunta nada, solo ejecuta."""
+        self._get_issue_fields(issue_key, [])
+        payload = {"timeSpentSeconds": seconds, "started": started}
+        if comment:
+            payload["comment"] = _text_to_adf(comment)
+        resp = requests.post(
+            f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/worklog",
+            headers=self._headers(),
+            params=_ADJUST_ESTIMATE,
+            json=payload,
+            timeout=15,
+        )
+        if not resp.ok:
+            raise JiraError(f"Jira {resp.status_code} al apuntar tiempo en {issue_key}: {resp.text}")
+        return {"id": resp.json()["id"]}
+
+    def update_worklog(
+        self,
+        issue_key: str,
+        worklog_id: str,
+        seconds: int | None = None,
+        started: str | None = None,
+        comment: str | None = None,
+    ) -> None:
+        """Corrige un worklog propio. Requiere que el llamante ya haya
+        confirmado — esta función no pregunta nada, solo ejecuta."""
+        worklog_id = validate_worklog_id(worklog_id)
+        self.get_my_worklog(issue_key, worklog_id)
+        payload = {}
+        if seconds is not None:
+            payload["timeSpentSeconds"] = seconds
+        if started is not None:
+            payload["started"] = started
+        if comment is not None:
+            payload["comment"] = _text_to_adf(comment)
+        if not payload:
+            raise JiraError("nada que actualizar")
+        resp = requests.put(
+            f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/worklog/{worklog_id}",
+            headers=self._headers(),
+            params=_ADJUST_ESTIMATE,
+            json=payload,
+            timeout=15,
+        )
+        if not resp.ok:
+            raise JiraError(f"Jira {resp.status_code} al corregir el worklog {worklog_id}: {resp.text}")
+
+    def delete_worklog(self, issue_key: str, worklog_id: str) -> None:
+        """Borra un worklog propio. Requiere que el llamante ya haya
+        confirmado — esta función no pregunta nada, solo ejecuta."""
+        worklog_id = validate_worklog_id(worklog_id)
+        self.get_my_worklog(issue_key, worklog_id)
+        resp = requests.delete(
+            f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/worklog/{worklog_id}",
+            headers=self._headers(),
+            params=_ADJUST_ESTIMATE,
+            timeout=15,
+        )
+        if not resp.ok:
+            raise JiraError(f"Jira {resp.status_code} al borrar el worklog {worklog_id}: {resp.text}")

@@ -22,6 +22,12 @@ git.
   preview y confirmación en dos pasos. Añaden o quitan sin tocar las demás.
 - `list_open_pull_requests` acepta `source_branch` para buscar el PR
   abierto de una rama.
+- Tiempo dedicado (worklogs): `list_worklogs` (solo lectura),
+  `add_worklog`, `update_worklog` y `delete_worklog` (confirmación en dos
+  pasos). Se puede apuntar en cualquier tarea del proyecto; corregir y
+  borrar, solo las entradas propias. Duración en horas/minutos (`1h 30m`),
+  máximo 12h por entrada, sin fechas futuras. Jira resta el tiempo de la
+  estimación restante (`adjustEstimate=auto`), igual que desde la web.
 
 ### Cambiado
 - Las transiciones (`start_task`, `transition_task`, y el paso automático
