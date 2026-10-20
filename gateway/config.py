@@ -59,6 +59,11 @@ class Config:
     # "cualquier pipeline del bitbucket-pipelines.yml" (evita que un agente
     # dispare por error algo como un deploy a producción).
     bitbucket_allowed_pipelines: tuple[str, ...] = ()
+    # Allowlist opcional de estados destino para las transiciones. Vacía =
+    # cualquier transición del workflow (comportamiento de siempre). Los
+    # estados configurados arriba (in_progress/selected) se permiten
+    # siempre: los fija quien despliega, no el agente.
+    jira_allowed_statuses: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -67,6 +72,9 @@ class Config:
         )
         allowed_pipelines = tuple(
             p.strip() for p in os.environ.get("BITBUCKET_ALLOWED_PIPELINES", "").split(",") if p.strip()
+        )
+        allowed_statuses = tuple(
+            st.strip() for st in os.environ.get("JIRA_ALLOWED_STATUSES", "").split(",") if st.strip()
         )
         return cls(
             jira_email=_require("JIRA_EMAIL"),
@@ -85,6 +93,7 @@ class Config:
             bitbucket_default_repo=os.environ.get("BITBUCKET_DEFAULT_REPO") or None,
             bitbucket_default_target_branch=os.environ.get("BITBUCKET_DEFAULT_TARGET_BRANCH", "pre"),
             bitbucket_allowed_pipelines=allowed_pipelines,
+            jira_allowed_statuses=allowed_statuses,
         )
 
     @property

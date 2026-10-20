@@ -6,6 +6,33 @@ el proyecto sigue [versionado semántico](https://semver.org/lang/es/).
 Las entradas hasta la 0.3.0 se han reconstruido a partir del historial de
 git.
 
+## [Sin publicar]
+
+### Añadido
+- `list_my_tasks` y `list_unassigned_tasks` aceptan `statuses` opcional
+  para filtrar por estado. No es JQL libre: solo nombres de estado
+  validados, que entran entre comillas en la query fija.
+- `transition_task(issue_key, status)`: cambia el estado de una tarea
+  asignada a ti (ej. a «Listo para validar»). Hace lo mismo que
+  `start_task` con `status`, pero con un nombre que se encuentra mejor.
+- `JIRA_ALLOWED_STATUSES` (opcional): allowlist de estados destino para
+  `start_task` y `transition_task`. Los estados configurados de «en
+  progreso» y «seleccionada» se permiten siempre.
+- `update_task` acepta `add_labels` y `remove_labels`, con el mismo
+  preview y confirmación en dos pasos. Añaden o quitan sin tocar las demás.
+- `list_open_pull_requests` acepta `source_branch` para buscar el PR
+  abierto de una rama.
+
+### Cambiado
+- Las transiciones (`start_task`, `transition_task`, y el paso automático
+  de `create_task`) aceptan el nombre del estado destino además del de la
+  transición: en muchos workflows no coinciden (ej. «Devolver a X» lleva a
+  «X»). Si no encaja ninguna, el error lista «transición → estado».
+- `create_pull_request` busca el PR existente de la rama con un filtro en
+  Bitbucket, así que ya no se le escapa si hay más de 50 PRs abiertos.
+- `create_task` y `update_task` rechazan etiquetas con espacios antes de
+  llamar a Jira.
+
 ## [0.4.0] - 2026-10-09
 
 ### Añadido

@@ -170,16 +170,23 @@ class BitbucketClient:
             "destination": pr["destination"]["branch"]["name"],
         }
 
-    def list_open_pull_requests(self, repo_slug: str) -> list[dict]:
+    def list_open_pull_requests(self, repo_slug: str, source_branch: str | None = None) -> list[dict]:
         """Solo lectura. Devuelve como mucho los primeros 50 PR abiertos
         (límite de página de Bitbucket) — suficiente para el uso normal de
-        un repo de equipo."""
+        un repo de equipo. Con `source_branch`, el filtro lo hace Bitbucket
+        (BBQL), así que no le afecta ese límite. El nombre de rama ya viene
+        validado por _BRANCH_RE (sin comillas), así que no puede romper la
+        query."""
         validate_repo_slug(repo_slug, self.cfg)
+        params = {"state": "OPEN", "pagelen": 50}
+        if source_branch is not None:
+            validate_branch_name(source_branch)
+            params["q"] = f'source.branch.name = "{source_branch}"'
 
         resp = requests.get(
             f"{self._repo_url(repo_slug)}/pullrequests",
             headers=self._headers(),
-            params={"state": "OPEN", "pagelen": 50},
+            params=params,
             timeout=15,
         )
         _raise_for_status(resp, f"listar PRs de {repo_slug}")
@@ -219,7 +226,7 @@ class BitbucketClient:
         validate_repo_slug(repo_slug, self.cfg)
         validate_branch_name(source_branch)
 
-        for pr in self.list_open_pull_requests(repo_slug):
+        for pr in self.list_open_pull_requests(repo_slug, source_branch):
             if pr["source"] == source_branch:
                 return pr
         return None

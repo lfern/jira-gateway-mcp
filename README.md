@@ -3,8 +3,8 @@
 MCP local que expone acciones al agente: `list_my_tasks`,
 `list_unassigned_tasks`, `get_task`, `list_task_comments`, `create_task`,
 `update_task` y `add_comment` (las tres con confirmación obligatoria en dos
-pasos), `assign_task` (solo a ti y solo si está sin asignar) y `start_task`
-para Jira; y, si Bitbucket está configurado, `create_pull_request` (también con
+pasos), `assign_task` (solo a ti y solo si está sin asignar), `start_task` y
+`transition_task` para Jira; y, si Bitbucket está configurado, `create_pull_request` (también con
 confirmación en dos pasos), `list_open_pull_requests` y `get_pull_request`
 para pull requests, más `run_pipeline` (confirmación en dos pasos, allowlist
 dura de patrones) y `get_pipeline` para lanzar pipelines custom de
@@ -46,7 +46,13 @@ JIRA_IN_PROGRESS_STATUS=In Progress  # opcional, ajusta al nombre real de tu wor
 JIRA_SELECTED_STATUS=Selected for Development  # opcional, estado al que pasa create_task tras crear
 JIRA_DEFAULT_ISSUE_TYPE=Task  # opcional, ajusta al nombre real de tu tipo de issue
 JIRA_SUBTASK_ISSUE_TYPE=Subtask  # opcional, tipo usado al crear con parent_key sin issue_type explícito
+JIRA_ALLOWED_STATUSES=Listo para validar  # opcional, allowlist de estados destino (separados por comas); vacío = cualquiera
 ```
+
+`JIRA_ALLOWED_STATUSES` limita a qué estados pueden mover una tarea
+`start_task` y `transition_task`. Los estados de `JIRA_IN_PROGRESS_STATUS`
+y `JIRA_SELECTED_STATUS` se permiten siempre. Si no la defines, se permite
+cualquier transición del workflow, como hasta ahora.
 
 Bitbucket es **opcional**: si no añades estas variables, el gateway arranca
 igual solo con Jira, y las tools de Bitbucket devuelven un error explicando
@@ -312,8 +318,10 @@ haciendo tú o Bitbucket en el momento del merge):
   gateway no la inventa, solo la transporta. No se envían reviewers
   explícitos: si el repo tiene default reviewers configurados en Bitbucket,
   se añaden solos al crear el PR.
-- `list_open_pull_requests(repo_slug=None)` — solo lectura, PRs abiertos del
-  repo (por defecto `BITBUCKET_DEFAULT_REPO`).
+- `list_open_pull_requests(repo_slug=None, source_branch=None)` — solo
+  lectura, PRs abiertos del repo (por defecto `BITBUCKET_DEFAULT_REPO`). Con
+  `source_branch`, solo los que salen de esa rama exacta (el filtro lo hace
+  Bitbucket, sin el límite de 50).
 - `get_pull_request(pr_id, repo_slug=None)` — solo lectura, detalle de un PR
   por id.
 
@@ -364,7 +372,9 @@ falta ir a adivinarlo desde un 403 pelado.
 
 ## Flujo de uso
 
-1. "¿Qué tareas tengo pendientes?" → `list_my_tasks`
+1. "¿Qué tareas tengo pendientes?" → `list_my_tasks`. "¿Cuáles tengo en
+   Selected for Development?" → `list_my_tasks` con
+   `statuses=["Selected for Development"]` (igual en `list_unassigned_tasks`).
 2. "Crea una tarea para X" → `create_task` (sin `confirm`) → el agente te
    enseña el preview (proyecto, tipo, resumen, descripción, etiquetas) → si
    dices que sí, el agente vuelve a llamar a `create_task` con `confirm=True`
@@ -376,7 +386,9 @@ falta ir a adivinarlo desde un 403 pelado.
    `status="Selected for Development"` (o el nombre exacto de la transición
    intermedia de tu workflow).
 4. "Empieza la PROJ-123" → `start_task` sin `status` → transiciona al estado
-   de "en progreso" configurado en `JIRA_IN_PROGRESS_STATUS`.
+   de "en progreso" configurado en `JIRA_IN_PROGRESS_STATUS`. "Pasa la
+   PROJ-123 a Listo para validar" → `transition_task` con
+   `status="Listo para validar"`.
 5. "¿De qué va la PROJ-123?" → `get_task` (solo lectura: resumen,
    descripción en markdown, estado, asignado, labels y padre).
 6. "Reescribe la descripción de la PROJ-123" → `update_task` (sin
@@ -384,7 +396,8 @@ falta ir a adivinarlo desde un 403 pelado.
    dices que sí, vuelve a llamar con `confirm=True`. La descripción va en
    markdown y sustituye a la entera; si la actual tiene cosas que markdown
    no representa (menciones, tablas, adjuntos...), el preview avisa de que
-   se perderían.
+   se perderían. Para etiquetas, `add_labels` / `remove_labels`: añaden o
+   quitan sin tocar las demás, con el mismo preview.
 7. "Asígnate la PROJ-124" (p. ej. una subtarea recién creada) →
    `assign_task` → te la asigna a ti si estaba sin asignar, y así ya puedes
    hacer `start_task`.
@@ -417,7 +430,10 @@ mensaje de un commit antes de confirmarlo.
 
 - **Catálogo cerrado de tools**: solo lo que aparece arriba, nada toca git
   ni ejecuta comandos arbitrarios. No hay "ejecuta este comando" genérico,
-  ni JQL libre en Jira, ni query BBQL libre en Bitbucket.
+  ni JQL libre en Jira, ni query BBQL libre en Bitbucket. Los filtros por
+  estado (`statuses`) y por rama (`source_branch`) solo aceptan nombres que
+  pasan una validación sin comillas, y se insertan entre comillas en una
+  query fija: no se puede salir del proyecto ni del repo.
 - **Bitbucket con allowlist dura de repos** (`BITBUCKET_ALLOWED_REPOS`):
   el token puede tener acceso a más repos del workspace de los que quieres
   que el agente toque; la allowlist es la barrera, no el scope del token.
@@ -448,7 +464,9 @@ mensaje de un commit antes de confirmarlo.
   `get_task`, `update_task`, `assign_task` y `start_task` comprueban el
   proyecto que devuelve Jira, porque Jira sigue resolviendo claves antiguas
   de issues movidos a otro proyecto.
-- **`start_task` solo transiciona issues asignados a ti**: comprueba el
+- **`start_task` y `transition_task` solo transicionan issues asignados a
+  ti**, y si defines `JIRA_ALLOWED_STATUSES`, solo a esos estados (así el
+  agente no puede cerrar ni rechazar tareas). Comprueban el
   `assignee` contra el usuario del token antes de tocar nada. Si el issue es
   de otra persona (o está sin asignar), falla sin transicionar. Esto no
   aplica a la transición automática de `create_task` a `JIRA_SELECTED_STATUS`,

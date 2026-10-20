@@ -30,7 +30,7 @@ from mcp.server.fastmcp import FastMCP
 from .adf import adf_to_markdown, markdown_to_adf
 from .bitbucket_client import BitbucketClient, BitbucketError
 from .config import Config, ConfigError
-from .jira_client import JiraClient, JiraError
+from .jira_client import JiraClient, JiraError, validate_labels
 
 mcp = FastMCP(
     "jira-gateway",
@@ -48,21 +48,25 @@ _bitbucket = BitbucketClient(_cfg) if _cfg.bitbucket_configured else None
 
 
 @mcp.tool()
-def list_my_tasks() -> list[dict]:
+def list_my_tasks(statuses: list[str] | None = None) -> list[dict]:
     """Lista tus tareas asignadas y no cerradas en el proyecto configurado.
-    Solo lectura. No acepta JQL ni parámetros: el filtro está fijado."""
+    Con `statuses` (ej. ['Selected for Development']), solo las que estén en
+    alguno de esos estados (nombre exacto del estado en Jira). Solo lectura.
+    No acepta JQL: el filtro está fijado y solo admite nombres de estado."""
     try:
-        return _jira.list_my_tasks()
+        return _jira.list_my_tasks(statuses)
     except JiraError as e:
         return [{"error": str(e)}]
 
 
 @mcp.tool()
-def list_unassigned_tasks() -> list[dict]:
+def list_unassigned_tasks(statuses: list[str] | None = None) -> list[dict]:
     """Lista las tareas sin asignar y no cerradas en el proyecto configurado.
-    Solo lectura. No acepta JQL ni parámetros: el filtro está fijado."""
+    Con `statuses`, solo las que estén en alguno de esos estados (nombre
+    exacto del estado en Jira). Solo lectura. No acepta JQL: el filtro está
+    fijado y solo admite nombres de estado."""
     try:
-        return _jira.list_unassigned_tasks()
+        return _jira.list_unassigned_tasks(statuses)
     except JiraError as e:
         return [{"error": str(e)}]
 
@@ -138,17 +142,31 @@ def start_task(issue_key: str, status: str | None = None) -> dict:
     """Transiciona el issue indicado en Jira. Sin `status`, lo pasa al estado
     de 'en progreso' configurado (JIRA_IN_PROGRESS_STATUS). Con `status`,
     transiciona a ese estado en su lugar (debe coincidir, sin distinguir
-    mayúsculas, con el nombre exacto de una transición disponible en el
-    workflow del issue, ej. 'Selected for Development') — útil para pasos
+    mayúsculas, con el nombre de una transición disponible o del estado al
+    que lleva, ej. 'Selected for Development') — útil para pasos
     previos a empezar a desarrollar. Solo funciona si el issue está asignado
     a ti; si no, devuelve error sin tocar nada. No toca git: la rama, el
     desarrollo, el commit y el push los gestiona Claude Code directamente con
     sus herramientas de siempre."""
-    resolved_status = status or _cfg.in_progress_status
+    return _transition_mine(issue_key, status or _cfg.in_progress_status)
+
+
+@mcp.tool()
+def transition_task(issue_key: str, status: str) -> dict:
+    """Cambia el estado de un issue en Jira (ej. a 'Listo para validar' al
+    terminar). `status` puede ser el nombre del estado destino o el de la
+    transición (sin distinguir mayúsculas); si no hay ninguna que encaje, el
+    error lista las disponibles como 'transición → estado'. Solo funciona si el issue está
+    asignado a ti. Si el .env define JIRA_ALLOWED_STATUSES, solo acepta esos
+    estados (más los de 'en progreso' y 'seleccionada' configurados)."""
+    return _transition_mine(issue_key, status)
+
+
+def _transition_mine(issue_key: str, status: str) -> dict:
     try:
         _jira.assert_assigned_to_me(issue_key)
-        _jira.transition_issue(issue_key, resolved_status)
-        return {"issue_key": issue_key, "status": resolved_status}
+        _jira.transition_issue(issue_key, status)
+        return {"issue_key": issue_key, "status": status}
     except JiraError as e:
         return {"error": str(e)}
 
@@ -206,25 +224,33 @@ def update_task(
     issue_key: str,
     summary: str | None = None,
     description: str | None = None,
+    add_labels: list[str] | None = None,
+    remove_labels: list[str] | None = None,
     confirm: bool = False,
 ) -> dict:
-    """Edita el resumen y/o la descripción de un issue del proyecto
-    configurado. La descripción se pasa en markdown (como devuelve
+    """Edita el resumen, la descripción y/o las etiquetas de un issue del
+    proyecto configurado. La descripción se pasa en markdown (como devuelve
     get_task) y se convierte a formato Jira; sustituye a la descripción
     entera, así que parte de la actual (get_task) y modifica solo lo
-    necesario. Lo que no se pase no se toca.
+    necesario. Las etiquetas no se sustituyen: `add_labels` añade y
+    `remove_labels` quita, sin tocar las demás. Lo que no se pase no se toca.
 
     IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
     envía nada, solo devuelve una vista previa con el diff del antes y el
     después — muéstrasela al usuario tal cual. Solo si el usuario la
     aprueba, vuelve a llamar con confirm=True y los mismos datos para
     guardarlo de verdad."""
-    if summary is None and description is None:
-        return {"error": "indica al menos summary o description"}
+    add_labels = add_labels or []
+    remove_labels = remove_labels or []
+    if summary is None and description is None and not add_labels and not remove_labels:
+        return {"error": "indica al menos summary, description, add_labels o remove_labels"}
     if summary is not None and not summary.strip():
         return {"error": "el resumen no puede quedar vacío"}
+    if set(add_labels) & set(remove_labels):
+        return {"error": "la misma etiqueta no puede estar en add_labels y remove_labels"}
 
     try:
+        validate_labels([*add_labels, *remove_labels])
         current = _jira.get_issue(issue_key)
     except JiraError as e:
         return {"error": str(e)}
@@ -242,6 +268,11 @@ def update_task(
                 changes["description_warning"] = _unsupported_warning(
                     current["description_unsupported"]
                 )
+    to_add = [l for l in dict.fromkeys(add_labels) if l not in current["labels"]]
+    to_remove = [l for l in dict.fromkeys(remove_labels) if l in current["labels"]]
+    if to_add or to_remove:
+        after_labels = [l for l in current["labels"] if l not in to_remove] + to_add
+        changes["labels"] = {"before": current["labels"], "after": after_labels}
 
     if not changes:
         return {"issue_key": issue_key, "no_changes": True, "note": "No hay nada distinto de lo que ya hay en Jira."}
@@ -263,6 +294,8 @@ def update_task(
             issue_key,
             summary if "summary" in changes else None,
             description if "description_diff" in changes else None,
+            to_add,
+            to_remove,
         )
     except JiraError as e:
         return {"error": str(e)}
@@ -386,9 +419,11 @@ def create_pull_request(
 
 
 @mcp.tool()
-def list_open_pull_requests(repo_slug: str | None = None) -> list[dict]:
+def list_open_pull_requests(repo_slug: str | None = None, source_branch: str | None = None) -> list[dict]:
     """Lista los pull requests abiertos del repo (por defecto
-    BITBUCKET_DEFAULT_REPO). Solo lectura."""
+    BITBUCKET_DEFAULT_REPO). Con `source_branch`, solo los que salen de esa
+    rama exacta (lista vacía si no hay ninguno) — útil para comprobar si ya
+    hay un PR abierto antes de crearlo. Solo lectura."""
     if _bitbucket is None:
         return [_bitbucket_unavailable()]
 
@@ -397,7 +432,7 @@ def list_open_pull_requests(repo_slug: str | None = None) -> list[dict]:
         return [{"error": "falta repo_slug (o configura BITBUCKET_DEFAULT_REPO en el .env)."}]
 
     try:
-        return _bitbucket.list_open_pull_requests(resolved_repo)
+        return _bitbucket.list_open_pull_requests(resolved_repo, source_branch)
     except BitbucketError as e:
         return [{"error": str(e)}]
 

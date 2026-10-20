@@ -245,3 +245,165 @@ def test_assign_task_tool_wraps_refusal(server):
     _add_issue(assignee={"accountId": "acc-ana", "displayName": "Ana"})
     _add_me()
     assert "ya está asignada a Ana" in server.assign_task("PROJ-7")["error"]
+
+
+# --- filtro por estado -----------------------------------------------------------
+
+
+@responses.activate
+def test_list_my_tasks_adds_quoted_status_filter(client):
+    responses.add(responses.GET, f"{BASE}/search/jql", json={"issues": []})
+
+    client.list_my_tasks(["Selected for Development", "Listo para validar"])
+
+    jql = responses.calls[0].request.params["jql"]
+    assert jql.startswith("project = PROJ AND assignee = currentUser() AND statusCategory != Done")
+    assert 'status IN ("Selected for Development", "Listo para validar")' in jql
+
+
+@responses.activate
+def test_list_unassigned_tasks_without_statuses_keeps_fixed_jql(client):
+    responses.add(responses.GET, f"{BASE}/search/jql", json={"issues": []})
+
+    client.list_unassigned_tasks()
+
+    assert responses.calls[0].request.params["jql"] == (
+        "project = PROJ AND assignee IS EMPTY AND statusCategory != Done ORDER BY updated DESC"
+    )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ['Done" OR project = OTRO OR status = "x', "a\\b", "", "x' OR 1=1", "a\nb"],
+)
+def test_list_my_tasks_rejects_injection_without_calling_jira(client, bad):
+    with pytest.raises(JiraError, match="formato inválido"):
+        client.list_my_tasks([bad])
+
+
+# --- transiciones y allowlist de estados -----------------------------------------
+
+
+def _add_transitions(key="PROJ-7"):
+    url = f"{BASE}/issue/{key}/transitions"
+    responses.add(
+        responses.GET,
+        url,
+        json={
+            "transitions": [
+                {"id": "31", "name": "Listo para validar", "to": {"name": "Listo para validar"}},
+                {"id": "41", "name": "Done", "to": {"name": "Done"}},
+                {"id": "51", "name": "Devolver a In Progress", "to": {"name": "In Progress"}},
+                # Nombre engañoso: suena a un estado permitido pero lleva a Done.
+                {"id": "61", "name": "Revisar", "to": {"name": "Done"}},
+            ]
+        },
+    )
+    responses.add(responses.POST, url, status=204)
+
+
+@responses.activate
+def test_transition_task_moves_my_issue(server):
+    _add_issue(assignee={"accountId": ME, "displayName": "Yo"})
+    _add_me()
+    _add_transitions()
+
+    assert server.transition_task("PROJ-7", "listo para validar") == {
+        "issue_key": "PROJ-7",
+        "status": "listo para validar",
+    }
+    assert json.loads(responses.calls[-1].request.body) == {"transition": {"id": "31"}}
+
+
+@responses.activate
+def test_transition_task_refuses_issue_of_someone_else(server):
+    _add_issue(assignee={"accountId": "acc-ana", "displayName": "Ana"})
+    _add_me()
+
+    assert "no está asignada a ti" in server.transition_task("PROJ-7", "Done")["error"]
+    assert all(c.request.method == "GET" for c in responses.calls)
+
+
+@responses.activate
+def test_transition_issue_respects_allowed_statuses():
+    client = JiraClient(make_config(jira_allowed_statuses=("Listo para validar",)))
+    _add_transitions()
+
+    with pytest.raises(JiraError, match="estado no permitido"):
+        client.transition_issue("PROJ-7", "Done")
+    # La allowlist mira el estado destino, no el nombre de la transición.
+    client_revisar = JiraClient(make_config(jira_allowed_statuses=("Revisar",)))
+    with pytest.raises(JiraError, match="estado no permitido"):
+        client_revisar.transition_issue("PROJ-7", "Revisar")
+    assert all(c.request.method == "GET" for c in responses.calls)
+
+    client.transition_issue("PROJ-7", "LISTO PARA VALIDAR")
+
+
+@responses.activate
+def test_transition_issue_accepts_destination_status_name(client):
+    _add_transitions()
+
+    client.transition_issue("PROJ-7", "in progress")
+
+    assert json.loads(responses.calls[-1].request.body) == {"transition": {"id": "51"}}
+
+
+@responses.activate
+def test_transition_issue_unknown_lists_transitions_and_destinations(client):
+    _add_transitions()
+
+    with pytest.raises(JiraError, match="Devolver a In Progress → In Progress"):
+        client.transition_issue("PROJ-7", "No existe")
+
+
+def test_allowed_statuses_always_include_configured_ones():
+    from gateway.jira_client import validate_target_status
+
+    cfg = make_config(jira_allowed_statuses=("Listo para validar",))
+    validate_target_status("in progress", cfg)
+    validate_target_status("Selected for Development", cfg)
+
+
+# --- etiquetas -------------------------------------------------------------------
+
+
+@responses.activate
+def test_update_task_rejects_same_label_in_add_and_remove(server):
+    _add_issue()  # labels actuales: ["backend"]
+
+    result = server.update_task("PROJ-7", add_labels=["EXT", "backend"], remove_labels=["backend"])
+
+    assert "add_labels y remove_labels" in result["error"]
+    assert len(responses.calls) == 0
+
+
+@responses.activate
+def test_update_task_labels_preview_and_confirm(server):
+    _add_issue()  # labels actuales: ["backend"]
+    responses.add(responses.PUT, f"{BASE}/issue/PROJ-7", status=204)
+
+    preview = server.update_task("PROJ-7", add_labels=["EXT", "backend"], remove_labels=["frontend"])
+    assert preview["preview"] is True
+    assert preview["labels"] == {"before": ["backend"], "after": ["backend", "EXT"]}
+    assert all(c.request.method == "GET" for c in responses.calls)
+
+    result = server.update_task("PROJ-7", add_labels=["EXT"], remove_labels=["backend"], confirm=True)
+    assert result["updated"] is True
+    assert json.loads(responses.calls[-1].request.body) == {
+        "update": {"labels": [{"add": "EXT"}, {"remove": "backend"}]}
+    }
+
+
+@responses.activate
+def test_update_task_labels_already_applied_is_noop(server):
+    _add_issue()
+
+    result = server.update_task("PROJ-7", add_labels=["backend"], confirm=True)
+
+    assert result["no_changes"] is True
+    assert all(c.request.method == "GET" for c in responses.calls)
+
+
+def test_update_task_rejects_label_with_spaces(server):
+    assert "etiqueta inválida" in server.update_task("PROJ-7", add_labels=["con espacio"])["error"]

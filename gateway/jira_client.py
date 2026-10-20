@@ -11,6 +11,14 @@ from .config import Config
 
 _ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9]*-\d+$")
 
+# Nombre de estado que puede ir dentro de la JQL fija: letras (con tildes),
+# dígitos, espacios y poca puntuación. Sin comillas ni barras invertidas, así
+# que entre comillas no puede romper la query.
+_STATUS_NAME_RE = re.compile(r"^[\w][\w .()/-]{0,59}$")
+
+# Las etiquetas de Jira no admiten espacios.
+_LABEL_RE = re.compile(r"^[^\s]{1,255}$")
+
 
 class JiraError(Exception):
     pass
@@ -21,6 +29,35 @@ def validate_issue_key(key: str, expected_project: str) -> None:
         raise JiraError(f"issue key con formato inválido: {key!r}")
     if not key.startswith(f"{expected_project}-"):
         raise JiraError(f"{key} no pertenece al proyecto {expected_project}")
+
+
+def validate_status_name(name: str) -> None:
+    if not isinstance(name, str) or not _STATUS_NAME_RE.match(name):
+        raise JiraError(f"nombre de estado con formato inválido: {name!r}")
+
+
+def validate_labels(labels: list[str]) -> None:
+    for label in labels:
+        if not isinstance(label, str) or not _LABEL_RE.match(label):
+            raise JiraError(f"etiqueta inválida: {label!r} (sin espacios, 1-255 caracteres)")
+
+
+def _transition_destination(transition: dict) -> str:
+    """Nombre del estado al que lleva una transición (Jira lo manda en `to`)."""
+    return (transition.get("to") or {}).get("name") or transition["name"]
+
+
+def validate_target_status(status: str, cfg: Config) -> None:
+    """Aplica JIRA_ALLOWED_STATUSES si está configurada. Los estados que fija
+    quien despliega (in_progress/selected) se permiten siempre."""
+    if not cfg.jira_allowed_statuses:
+        return
+    allowed = {s.lower() for s in (*cfg.jira_allowed_statuses, cfg.in_progress_status, cfg.selected_status)}
+    if status.lower() not in allowed:
+        raise JiraError(
+            f"estado no permitido: {status!r}. Permitidos: "
+            f"{sorted({*cfg.jira_allowed_statuses, cfg.in_progress_status, cfg.selected_status})}"
+        )
 
 
 def _text_to_adf(text: str) -> dict:
@@ -162,23 +199,36 @@ class JiraClient:
         }
 
     def update_issue(
-        self, issue_key: str, summary: str | None = None, description: str | None = None
+        self,
+        issue_key: str,
+        summary: str | None = None,
+        description: str | None = None,
+        add_labels: list[str] | None = None,
+        remove_labels: list[str] | None = None,
     ) -> None:
-        """Edita resumen y/o descripción (markdown). Requiere que el llamante
-        ya haya confirmado — esta función no pregunta nada, solo ejecuta."""
+        """Edita resumen y/o descripción (markdown) y añade/quita etiquetas
+        sin tocar las demás. Requiere que el llamante ya haya confirmado —
+        esta función no pregunta nada, solo ejecuta."""
         validate_issue_key(issue_key, self.cfg.project_key)
+        validate_labels([*(add_labels or []), *(remove_labels or [])])
         fields = {}
         if summary is not None:
             fields["summary"] = summary
         if description is not None:
             fields["description"] = markdown_to_adf(description)
-        if not fields:
+        label_ops = [{"add": l} for l in add_labels or []] + [{"remove": l} for l in remove_labels or []]
+        if not fields and not label_ops:
             raise JiraError("nada que actualizar")
 
+        payload = {}
+        if fields:
+            payload["fields"] = fields
+        if label_ops:
+            payload["update"] = {"labels": label_ops}
         resp = requests.put(
             f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}",
             headers=self._headers(),
-            json={"fields": fields},
+            json=payload,
             timeout=15,
         )
         if not resp.ok:
@@ -194,6 +244,7 @@ class JiraClient:
     ) -> dict:
         """Crea un issue. Requiere que el llamante ya haya confirmado —
         esta función no pregunta nada, solo ejecuta."""
+        validate_labels(labels or [])
         payload = {
             "fields": {
                 "project": {"key": self.cfg.project_key},
@@ -218,36 +269,27 @@ class JiraClient:
         key = body["key"]
         return {"key": key, "url": f"{self.cfg.jira_site_url}/browse/{key}"}
 
-    def list_my_tasks(self) -> list[dict]:
-        """Única query permitida: mis tareas abiertas en el proyecto configurado."""
-        jql = (
-            f"project = {self.cfg.project_key} AND assignee = currentUser() "
-            "AND statusCategory != Done ORDER BY updated DESC"
-        )
-        resp = requests.get(
-            f"{self.cfg.jira_api_base}/rest/api/3/search/jql",
-            headers=self._headers(),
-            params={"jql": jql, "fields": "summary,status"},
-            timeout=15,
-        )
-        if not resp.ok:
-            raise JiraError(f"Jira {resp.status_code}: {resp.text}")
+    def list_my_tasks(self, statuses: list[str] | None = None) -> list[dict]:
+        """Mis tareas abiertas en el proyecto configurado, opcionalmente solo
+        en los estados indicados."""
+        return self._search_open("assignee = currentUser()", statuses)
 
-        issues = resp.json().get("issues", [])
-        return [
-            {
-                "key": i["key"],
-                "summary": i["fields"]["summary"],
-                "status": i["fields"]["status"]["name"],
-            }
-            for i in issues
-        ]
+    def list_unassigned_tasks(self, statuses: list[str] | None = None) -> list[dict]:
+        """Tareas sin asignar y abiertas en el proyecto configurado,
+        opcionalmente solo en los estados indicados."""
+        return self._search_open("assignee IS EMPTY", statuses)
 
-    def list_unassigned_tasks(self) -> list[dict]:
-        """Única query permitida: tareas sin asignar y abiertas en el proyecto configurado."""
+    def _search_open(self, assignee_clause: str, statuses: list[str] | None) -> list[dict]:
+        """La JQL es fija; lo único que entra de fuera son nombres de estado
+        ya validados (sin comillas), que van entre comillas en un `IN`."""
+        status_clause = ""
+        if statuses:
+            for st in statuses:
+                validate_status_name(st)
+            status_clause = " AND status IN (" + ", ".join(f'"{st}"' for st in statuses) + ")"
         jql = (
-            f"project = {self.cfg.project_key} AND assignee IS EMPTY "
-            "AND statusCategory != Done ORDER BY updated DESC"
+            f"project = {self.cfg.project_key} AND {assignee_clause} "
+            f"AND statusCategory != Done{status_clause} ORDER BY updated DESC"
         )
         resp = requests.get(
             f"{self.cfg.jira_api_base}/rest/api/3/search/jql",
@@ -269,6 +311,11 @@ class JiraClient:
         ]
 
     def transition_issue(self, issue_key: str, target_status: str) -> None:
+        """`target_status` puede ser el nombre de la transición o el del
+        estado al que lleva: en muchos workflows no coinciden (ej. la
+        transición 'Devolver a X' lleva al estado 'X'). Si coincide con el
+        nombre de una transición, gana esa. La allowlist se aplica al estado
+        al que lleva de verdad, no al texto recibido."""
         validate_issue_key(issue_key, self.cfg.project_key)
 
         url = f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/transitions"
@@ -277,20 +324,17 @@ class JiraClient:
             raise JiraError(f"no pude leer transiciones de {issue_key}: {resp.status_code}")
 
         transitions = resp.json().get("transitions", [])
-        target = next(
-            (
-                t
-                for t in transitions
-                if t["name"].lower() == target_status.lower()
-            ),
-            None,
+        wanted = target_status.lower()
+        target = next((t for t in transitions if t["name"].lower() == wanted), None) or next(
+            (t for t in transitions if _transition_destination(t).lower() == wanted), None
         )
         if target is None:
-            available = [t["name"] for t in transitions]
+            available = [f"{t['name']} → {_transition_destination(t)}" for t in transitions]
             raise JiraError(
-                f"no encuentro la transición '{target_status}' "
-                f"para {issue_key}. Disponibles: {available}"
+                f"no encuentro la transición ni el estado '{target_status}' "
+                f"para {issue_key}. Disponibles (transición → estado): {available}"
             )
+        validate_target_status(_transition_destination(target), self.cfg)
 
         resp = requests.post(
             url,
