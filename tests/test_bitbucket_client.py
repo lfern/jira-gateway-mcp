@@ -315,6 +315,23 @@ def test_find_open_pr_for_branch_returns_none_when_no_match(cfg):
 
 
 @responses.activate
+def test_find_open_pr_for_branch_ignores_merged_pr(cfg):
+    # Si Bitbucket devolviera un PR ya mergeado de la misma rama, no debe
+    # bloquear la creación de uno nuevo.
+    client = BitbucketClient(cfg)
+    responses.add(
+        responses.GET,
+        "https://api.bitbucket.org/2.0/repositories/dividend-refund/refunder-react/pullrequests",
+        json={"values": [_pr_body(pr_id=949, source="feature/REF-432-algo", state="MERGED")]},
+        status=200,
+    )
+
+    found = client.find_open_pr_for_branch("refunder-react", "feature/REF-432-algo")
+
+    assert found is None
+
+
+@responses.activate
 def test_list_open_pull_requests_filters_by_branch_on_bitbucket(cfg):
     client = BitbucketClient(cfg)
     responses.add(
@@ -327,7 +344,10 @@ def test_list_open_pull_requests_filters_by_branch_on_bitbucket(cfg):
     prs = client.list_open_pull_requests("refunder-react", "feature/REF-432-algo")
 
     assert [p["id"] for p in prs] == [5]
-    assert responses.calls[0].request.params["q"] == 'source.branch.name = "feature/REF-432-algo"'
+    assert (
+        responses.calls[0].request.params["q"]
+        == 'source.branch.name = "feature/REF-432-algo" AND state = "OPEN"'
+    )
 
 
 def test_list_open_pull_requests_rejects_bad_branch_without_http_call(cfg):

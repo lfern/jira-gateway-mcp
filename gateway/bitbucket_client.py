@@ -174,14 +174,15 @@ class BitbucketClient:
         """Solo lectura. Devuelve como mucho los primeros 50 PR abiertos
         (límite de página de Bitbucket) — suficiente para el uso normal de
         un repo de equipo. Con `source_branch`, el filtro lo hace Bitbucket
-        (BBQL), así que no le afecta ese límite. El nombre de rama ya viene
-        validado por _BRANCH_RE (sin comillas), así que no puede romper la
-        query."""
+        (BBQL), así que no le afecta ese límite. Ojo: con `q`, Bitbucket
+        ignora el parámetro `state`, así que el estado va también dentro de
+        la query. El nombre de rama ya viene validado por _BRANCH_RE (sin
+        comillas), así que no puede romper la query."""
         validate_repo_slug(repo_slug, self.cfg)
         params = {"state": "OPEN", "pagelen": 50}
         if source_branch is not None:
             validate_branch_name(source_branch)
-            params["q"] = f'source.branch.name = "{source_branch}"'
+            params["q"] = f'source.branch.name = "{source_branch}" AND state = "OPEN"'
 
         resp = requests.get(
             f"{self._repo_url(repo_slug)}/pullrequests",
@@ -227,7 +228,7 @@ class BitbucketClient:
         validate_branch_name(source_branch)
 
         for pr in self.list_open_pull_requests(repo_slug, source_branch):
-            if pr["source"] == source_branch:
+            if pr["source"] == source_branch and pr["state"] == "OPEN":
                 return pr
         return None
 
