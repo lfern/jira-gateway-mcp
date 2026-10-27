@@ -74,6 +74,10 @@ BITBUCKET_DEFAULT_TARGET_BRANCH=pre  # opcional, rama destino si la tool no reci
 # Solo si vas a usar run_pipeline/get_pipeline. Allowlist dura de patrones de
 # pipeline custom (separados por comas); vacío = run_pipeline falla siempre.
 BITBUCKET_ALLOWED_PIPELINES=sello-version-pre,sello-version-staging,sello-version-prod
+
+# Opcional. Allowlist de revisores explícitos de create_pull_request
+# (account_id, separados por comas); vacío = cualquier miembro del workspace.
+BITBUCKET_ALLOWED_REVIEWERS=557058:aaaa-...,557058:bbbb-...
 ```
 
 `gateway/config.py` lo carga solo (vía `python-dotenv`) al arrancar —no hace
@@ -303,13 +307,19 @@ con exactamente estos scopes:
 - `read:pullrequest:bitbucket`
 - `write:pullrequest:bitbucket`
 
+Si vas a pedir revisores explícitos (`reviewers` en `create_pull_request`),
+el gateway también lee los miembros del workspace y tu propio usuario, así
+que el token necesita además `read:workspace:bitbucket` y
+`read:user:bitbucket`. Sin ellos, solo falla la llamada con `reviewers` (con
+un error que dice qué scope falta); el resto sigue igual.
+
 **Ese token lo generas y lo pegas en el `.env` del servicio tú mismo — el
 agente nunca lo pide ni lo escribe.**
 
 Tools disponibles (nada de merge, approve, decline ni push — eso lo sigues
 haciendo tú o Bitbucket en el momento del merge):
 
-- `create_pull_request(source_branch, title, description, repo_slug=None, target_branch=None, close_source_branch=True, confirm=False)` —
+- `create_pull_request(source_branch, title, description, repo_slug=None, target_branch=None, close_source_branch=True, reviewers=None, confirm=False)` —
   mismo protocolo preview→confirm que `create_task`: sin `confirm` devuelve
   exactamente lo que se enviaría (repo, rama origen, rama destino, título,
   descripción completa, `close_source_branch`) sin tocar Bitbucket; con
@@ -317,15 +327,23 @@ haciendo tú o Bitbucket en el momento del merge):
   nuevo (devuelve el existente con `already_exists: true`), si no lo crea.
   La descripción la redacta el agente (a partir de los commits de la rama y
   la clave Jira que suele ir en el nombre, ej. `feature/REF-432-...`); el
-  gateway no la inventa, solo la transporta. No se envían reviewers
-  explícitos: si el repo tiene default reviewers configurados en Bitbucket,
-  se añaden solos al crear el PR.
+  gateway no la inventa, solo la transporta. Los default reviewers del
+  repo se añaden siempre. Con `reviewers` (lista de account_id, `{uuid}` o
+  nickname; el email no vale porque Bitbucket no lo expone) se suman
+  revisores explícitos, sin duplicados: se buscan entre los miembros del
+  workspace y el preview los enseña ya resueltos (nombre y `account_id`),
+  junto con los default reviewers que se van a sumar. Un revisor que no
+  existe, o que no está en `BITBUCKET_ALLOWED_REVIEWERS` (si la defines),
+  hace fallar la tool sin crear nada. Si el autor del PR está en la lista,
+  se quita y se avisa en `warnings`. Si ya había un PR abierto para la
+  rama, se devuelve ese sin tocar sus revisores, con un aviso. La respuesta
+  incluye `reviewers` (nombre y `account_id`).
 - `list_open_pull_requests(repo_slug=None, source_branch=None)` — solo
   lectura, PRs abiertos del repo (por defecto `BITBUCKET_DEFAULT_REPO`). Con
   `source_branch`, solo los que salen de esa rama exacta (el filtro lo hace
   Bitbucket, sin el límite de 50).
 - `get_pull_request(pr_id, repo_slug=None)` — solo lectura, detalle de un PR
-  por id.
+  por id, con sus `reviewers` (nombre y `account_id`).
 
 `repo_slug` está siempre restringido a la allowlist `BITBUCKET_ALLOWED_REPOS`
 del `.env` — un repo fuera de esa lista falla sin tocar Bitbucket, y una
@@ -501,7 +519,8 @@ mensaje de un commit antes de confirmarlo.
 - Scopes del token de Bitbucket (uno solo, separado del de Jira — ver
   [Configuración](#configuración-variables-de-entorno)): `read:repository:bitbucket`,
   `read:pullrequest:bitbucket` y `write:pullrequest:bitbucket` para PRs
-  ([detalle](#bitbucket-cloud-pull-requests)); si además vas a usar
+  (más `read:workspace:bitbucket` y `read:user:bitbucket` para pedir
+  revisores explícitos) ([detalle](#bitbucket-cloud-pull-requests)); si además vas a usar
   `run_pipeline`/`get_pipeline`, añade `read:pipeline:bitbucket` y
   `write:pipeline:bitbucket` ([detalle](#bitbucket-pipelines)). Las app
   passwords de Bitbucket están retiradas (fin: 28-jul-2026) — el token se

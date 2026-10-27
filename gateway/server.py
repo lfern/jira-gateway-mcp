@@ -535,6 +535,7 @@ def create_pull_request(
     repo_slug: str | None = None,
     target_branch: str | None = None,
     close_source_branch: bool = True,
+    reviewers: list[str] | None = None,
     confirm: bool = False,
 ) -> dict:
     """Crea un pull request en Bitbucket Cloud desde `source_branch` hacia
@@ -542,16 +543,25 @@ def create_pull_request(
     'pre'). Si no se pasa `repo_slug`, usa BITBUCKET_DEFAULT_REPO. La
     descripción la escribe el agente que llama (commits de la rama, clave
     Jira, etc.) — esta tool no inventa ninguna plantilla, solo transporta lo
-    que se le pasa. No añade reviewers explícitos: si el repo tiene default
-    reviewers configurados en Bitbucket, se añaden solos.
+    que se le pasa.
+
+    `reviewers` (opcional): revisores explícitos, cada uno como account_id
+    de Bitbucket, {uuid} o nickname (el email no vale: Bitbucket no lo
+    expone). Se buscan entre los miembros del workspace; si alguno no
+    existe, o el .env define BITBUCKET_ALLOWED_REVIEWERS y no está ahí, la
+    tool falla sin crear nada. Si el autor del PR está en la lista, se
+    quita y se avisa. Los default reviewers del repo se siguen añadiendo
+    siempre, con o sin `reviewers`: los explícitos se suman a ellos, sin
+    duplicados.
 
     IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
     crea nada, solo devuelve una vista previa exacta de lo que se enviaría
-    — muéstrasela al usuario tal cual. Solo si el usuario la aprueba, vuelve
+    (con los revisores ya resueltos: nombre visible y account_id) —
+    muéstrasela al usuario tal cual. Solo si el usuario la aprueba, vuelve
     a llamar con confirm=True y los mismos datos para crearlo de verdad. Si
     ya existe un PR abierto para esa rama origen, no crea uno nuevo: te
-    devuelve el existente. Esta tool NUNCA hace merge, approve, decline ni
-    push — solo crea o encuentra el PR."""
+    devuelve el existente, sin tocar sus revisores. Esta tool NUNCA hace
+    merge, approve, decline ni push — solo crea o encuentra el PR."""
     if _bitbucket is None:
         return _bitbucket_unavailable()
 
@@ -561,7 +571,7 @@ def create_pull_request(
     resolved_target = target_branch or _cfg.bitbucket_default_target_branch
 
     if not confirm:
-        return {
+        preview = {
             "preview": True,
             "repo": resolved_repo,
             "source_branch": source_branch,
@@ -569,25 +579,51 @@ def create_pull_request(
             "title": title,
             "description": description,
             "close_source_branch": close_source_branch,
-            "note": (
-                "Nada se ha enviado a Bitbucket todavía. Revisa este preview "
-                "con el usuario y, si lo aprueba, llama de nuevo con "
-                "confirm=True y los mismos datos."
-            ),
         }
+        if reviewers:
+            try:
+                resolution = _bitbucket.resolve_reviewers(resolved_repo, reviewers)
+            except BitbucketError as e:
+                return {"error": str(e)}
+            preview["reviewers"] = resolution["reviewers"]
+            preview["default_reviewers"] = resolution["default_reviewers"]
+            if resolution["warnings"]:
+                preview["warnings"] = resolution["warnings"]
+        preview["note"] = (
+            "Nada se ha enviado a Bitbucket todavía. Revisa este preview "
+            "con el usuario y, si lo aprueba, llama de nuevo con "
+            "confirm=True y los mismos datos."
+        )
+        return preview
 
     try:
         existing = _bitbucket.find_open_pr_for_branch(resolved_repo, source_branch)
         if existing:
-            return {"already_exists": True, **existing}
+            result = {"already_exists": True, **existing}
+            if reviewers:
+                result["warnings"] = [
+                    "Ya había un PR abierto para esta rama: se devuelve ese y los "
+                    "revisores pedidos NO se han aplicado (sus revisores no se tocan)."
+                ]
+            return result
 
+        resolution = _bitbucket.resolve_reviewers(resolved_repo, reviewers) if reviewers else None
         result = _bitbucket.create_pull_request(
-            resolved_repo, source_branch, resolved_target, title, description, close_source_branch
+            resolved_repo,
+            source_branch,
+            resolved_target,
+            title,
+            description,
+            close_source_branch,
+            reviewers=resolution["account_ids"] if resolution else None,
         )
     except BitbucketError as e:
         return {"error": str(e)}
 
-    return {"created": True, **result}
+    result = {"created": True, **result}
+    if resolution and resolution["warnings"]:
+        result["warnings"] = resolution["warnings"]
+    return result
 
 
 @mcp.tool()

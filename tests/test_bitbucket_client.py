@@ -145,11 +145,12 @@ def test_create_pull_request_builds_expected_payload(cfg):
         "state": "OPEN",
         "source": "feature/REF-432-algo",
         "destination": "pre",
+        "reviewers": [],
     }
 
 
 @responses.activate
-def test_create_pull_request_with_reviewers_maps_to_uuid_objects(cfg):
+def test_create_pull_request_with_reviewers_maps_to_account_id_objects(cfg):
     client = BitbucketClient(cfg)
     responses.add(
         responses.POST,
@@ -165,11 +166,11 @@ def test_create_pull_request_with_reviewers_maps_to_uuid_objects(cfg):
         title="t",
         description="d",
         close_source_branch=True,
-        reviewers=["{uuid-1}", "{uuid-2}"],
+        reviewers=["acc-1", "acc-2"],
     )
 
     sent = json.loads(responses.calls[0].request.body)
-    assert sent["reviewers"] == [{"uuid": "{uuid-1}"}, {"uuid": "{uuid-2}"}]
+    assert sent["reviewers"] == [{"account_id": "acc-1"}, {"account_id": "acc-2"}]
 
 
 def test_create_pull_request_rejects_repo_outside_allowlist_without_http_call(cfg):

@@ -59,6 +59,10 @@ class Config:
     # "cualquier pipeline del bitbucket-pipelines.yml" (evita que un agente
     # dispare por error algo como un deploy a producción).
     bitbucket_allowed_pipelines: tuple[str, ...] = ()
+    # Allowlist opcional de revisores explícitos (account_id) para
+    # create_pull_request. Vacía = cualquier miembro del workspace. No afecta
+    # a los default reviewers del repo: esos los fija quien administra el repo.
+    bitbucket_allowed_reviewers: tuple[str, ...] = ()
     # Allowlist opcional de estados destino para las transiciones. Vacía =
     # cualquier transición del workflow (comportamiento de siempre). Los
     # estados configurados arriba (in_progress/selected) se permiten
@@ -72,6 +76,9 @@ class Config:
         )
         allowed_pipelines = tuple(
             p.strip() for p in os.environ.get("BITBUCKET_ALLOWED_PIPELINES", "").split(",") if p.strip()
+        )
+        allowed_reviewers = tuple(
+            r.strip() for r in os.environ.get("BITBUCKET_ALLOWED_REVIEWERS", "").split(",") if r.strip()
         )
         allowed_statuses = tuple(
             st.strip() for st in os.environ.get("JIRA_ALLOWED_STATUSES", "").split(",") if st.strip()
@@ -93,6 +100,7 @@ class Config:
             bitbucket_default_repo=os.environ.get("BITBUCKET_DEFAULT_REPO") or None,
             bitbucket_default_target_branch=os.environ.get("BITBUCKET_DEFAULT_TARGET_BRANCH", "pre"),
             bitbucket_allowed_pipelines=allowed_pipelines,
+            bitbucket_allowed_reviewers=allowed_reviewers,
             jira_allowed_statuses=allowed_statuses,
         )
 

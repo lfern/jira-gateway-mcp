@@ -28,6 +28,17 @@ git.
   borrar, solo las entradas propias. Duración en horas/minutos (`1h 30m`),
   máximo 12h por entrada, sin fechas futuras. Jira resta el tiempo de la
   estimación restante (`adjustEstimate=auto`), igual que desde la web.
+- `create_pull_request` acepta `reviewers` opcional (account_id, `{uuid}`
+  o nickname), que se suman a los default reviewers del repo sin
+  duplicados. El preview los enseña ya resueltos; un revisor desconocido
+  falla sin crear nada y el autor se quita con aviso. Si ya hay un PR
+  abierto, no se tocan sus revisores. Necesita los scopes
+  `read:workspace:bitbucket` y `read:user:bitbucket` solo al usar
+  `reviewers`.
+- `BITBUCKET_ALLOWED_REVIEWERS` (opcional): allowlist de `account_id`
+  para los revisores explícitos.
+- `create_pull_request` y `get_pull_request` devuelven `reviewers` (nombre
+  y `account_id`).
 
 ### Cambiado
 - Las transiciones (`start_task`, `transition_task`, y el paso automático
