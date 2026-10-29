@@ -6,7 +6,9 @@ MCP local que expone acciones al agente: `list_my_tasks`,
 pasos), `assign_task` (solo a ti y solo si está sin asignar), `start_task`,
 `transition_task`, y `list_worklogs`, `add_worklog`, `update_worklog` y
 `delete_worklog` para el tiempo dedicado (las de escritura con confirmación
-en dos pasos; corregir y borrar, solo tus entradas) para Jira; y, si Bitbucket está configurado, `create_pull_request` (también con
+en dos pasos; corregir y borrar, solo tus entradas), y
+`list_pending_attachments` y `add_attachments` para adjuntar ficheros
+desde una bandeja (confirmación en dos pasos) para Jira; y, si Bitbucket está configurado, `create_pull_request` (también con
 confirmación en dos pasos), `list_open_pull_requests` y `get_pull_request`
 para pull requests, más `run_pipeline` (confirmación en dos pasos, allowlist
 dura de patrones) y `get_pipeline` para lanzar pipelines custom de
@@ -55,6 +57,38 @@ JIRA_ALLOWED_STATUSES=Listo para validar  # opcional, allowlist de estados desti
 `start_task` y `transition_task`. Los estados de `JIRA_IN_PROGRESS_STATUS`
 y `JIRA_SELECTED_STATUS` se permiten siempre. Si no la defines, se permite
 cualquier transición del workflow, como hasta ahora.
+
+### Adjuntos (opcional)
+
+```bash
+JIRA_ATTACHMENTS_DIR=/srv/jira-gateway-inbox-acme  # bandeja: única carpeta de la que se suben ficheros; vacío = adjuntos desactivados
+JIRA_ATTACHMENTS_MAX_MB=10  # opcional, tamaño máximo por fichero
+WSL_DISTRO_NAME=Ubuntu-22.04  # opcional, en WSL: el gateway arma con ella la ruta de Windows de la bandeja
+```
+
+El preview da la ruta de Windows de cada fichero
+(`\\wsl.localhost\<distro>\srv\...`) para abrirlo con un clic. En modo
+stdio, `WSL_DISTRO_NAME` ya viene en el entorno; en modo servicio la pone
+`setup_service.sh`. Si necesitas otra ruta, existe
+`JIRA_ATTACHMENTS_WINDOWS_DIR`, pero en el `.env` del servicio va **entre
+comillas simples** (`'\\servidor\carpeta'`): sin comillas, systemd trata
+las barras invertidas como escapes y se las come.
+
+`add_attachments` **nunca acepta rutas**, solo nombres de fichero dentro de
+la bandeja. Si aceptara rutas, en modo servicio el gateway podría subir a
+Jira ficheros que tú no puedes leer, empezando por su propio `.env` con los
+tokens. El agente copia el fichero a la bandeja con `install -m 644` y
+pasa el nombre.
+Se rechazan nombres con barras o punto inicial, enlaces simbólicos, hard
+links, ficheros que no sean normales y tipos fuera de la lista (png, jpg,
+gif, webp, pdf, txt, log). Tras subirlos, se borran de la bandeja.
+
+La bandeja tiene que estar fuera de `/home` si usas el modo servicio
+(`ProtectHome=true`). `setup_service.sh` la crea en
+`/srv/jira-gateway-inbox-<empresa>`, con propiedad de tu usuario y grupo
+del servicio (`2770`), y la añade al `.env`. Si un fichero llega sin
+permiso de lectura para el grupo (por ejemplo, copiado desde uno con modo
+`600`), la tool lo dice: `chmod g+r` y listo.
 
 Bitbucket es **opcional**: si no añades estas variables, el gateway arranca
 igual solo con Jira, y las tools de Bitbucket devuelven un error explicando
@@ -435,17 +469,25 @@ falta ir a adivinarlo desde un 403 pelado.
    `update_worklog` / `delete_worklog` con su `worklog_id` y el mismo
    preview → confirm. Jira resta el tiempo de la estimación restante, igual
    que al apuntarlo desde la web.
-11. Claude Code crea la rama, desarrolla, comitea y hace push con sus
+11. "Adjunta esta captura a la PROJ-123" → el agente la copia a la bandeja
+   (`list_pending_attachments` dice dónde está) → `add_attachments` (sin
+   `confirm`) → el preview da tamaño, tipo, sha256 y la ruta para abrir
+   cada fichero → **ábrelo y míralo antes de aprobar**: una captura puede
+   mostrar tokens o datos de clientes, y un adjunto no se puede editar
+   (quien siga la tarea recibe un aviso al momento) → `confirm=True` con
+   la lista `sha256` del preview. Si el fichero cambió desde el preview, no
+   se sube nada. `get_task` muestra los adjuntos que ya tiene la tarea.
+12. Claude Code crea la rama, desarrolla, comitea y hace push con sus
    herramientas normales de bash/git — el gateway no interviene en nada de
    esto, y puede seguir leyendo `git log`/`git diff`/`git blame` sin
    restricción alguna.
-12. Si Bitbucket está configurado: "Abre el PR de esta rama" →
+13. Si Bitbucket está configurado: "Abre el PR de esta rama" →
    `create_pull_request` (sin `confirm`) → el agente te enseña el preview
    (repo, rama origen/destino, título, descripción completa) → si dices que
    sí, vuelve a llamar con `confirm=True` → lo crea, o te devuelve el que ya
    estuviera abierto para esa rama si lo había. Si no está configurado,
    abres el PR a mano como hasta ahora.
-13. "¿Qué PRs hay abiertos en refunder-react?" → `list_open_pull_requests`.
+14. "¿Qué PRs hay abiertos en refunder-react?" → `list_open_pull_requests`.
    "¿Cómo va el PR 87?" → `get_pull_request`. Ambas de solo lectura.
 
 Nota sobre la confirmación: además del preview de `create_task`, Claude Code
@@ -499,6 +541,9 @@ mensaje de un commit antes de confirmarlo.
   interpreta el gateway (no Jira), con un máximo de 12h por entrada, para
   que el preview muestre exactamente lo que se guarda y un "30h" en vez
   de "3h" no pase.
+- **Adjuntos solo desde la bandeja, por nombre.** Ver
+  [Adjuntos](#adjuntos-opcional). El sha256 del preview se comprueba al
+  confirmar, así que se sube exactamente lo que revisaste.
 - **`start_task` y `transition_task` solo transicionan issues asignados a
   ti**, y si defines `JIRA_ALLOWED_STATUSES`, solo a esos estados (así el
   agente no puede cerrar ni rechazar tareas). Comprueban el

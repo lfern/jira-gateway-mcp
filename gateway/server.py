@@ -28,6 +28,7 @@ import os
 from mcp.server.fastmcp import FastMCP
 
 from .adf import adf_to_markdown, markdown_to_adf
+from .attachments import AttachmentError, inbox_from_config, validate_filenames
 from .bitbucket_client import BitbucketClient, BitbucketError
 from .config import Config, ConfigError
 from .jira_client import (
@@ -36,6 +37,7 @@ from .jira_client import (
     format_duration,
     parse_duration,
     parse_started,
+    validate_issue_key,
     validate_labels,
 )
 
@@ -51,6 +53,9 @@ except ConfigError as e:
     raise SystemExit(f"Config inválida: {e}")
 
 _jira = JiraClient(_cfg)
+_inbox = inbox_from_config(
+    _cfg.jira_attachments_dir, _cfg.jira_attachments_max_mb, _cfg.jira_attachments_windows_dir
+)
 _bitbucket = BitbucketClient(_cfg) if _cfg.bitbucket_configured else None
 
 
@@ -195,7 +200,8 @@ def assign_task(issue_key: str) -> dict:
 @mcp.tool()
 def get_task(issue_key: str) -> dict:
     """Detalle de un issue del proyecto configurado: resumen, descripción
-    (en markdown), estado, persona asignada, labels y padre. Solo lectura.
+    (en markdown), estado, persona asignada, labels, padre y adjuntos
+    (nombre, tamaño, tipo, autor). Solo lectura.
     Si la descripción tiene elementos sin equivalente en markdown
     (menciones, tablas, adjuntos...), vienen aplanados a texto y se avisa
     en `description_warning`."""
@@ -346,6 +352,128 @@ def add_comment(issue_key: str, body: str, confirm: bool = False) -> dict:
         return {"error": str(e)}
 
     return {"created": True, "issue_key": issue_key, **result}
+
+
+# --- adjuntos ------------------------------------------------------------------------
+#
+# Solo se suben ficheros de la bandeja (JIRA_ATTACHMENTS_DIR), por nombre y
+# nunca por ruta: ver gateway/attachments.py.
+
+
+def _attachments_unavailable() -> dict:
+    return {
+        "error": (
+            "adjuntos no configurados: falta JIRA_ATTACHMENTS_DIR en el .env "
+            "(la bandeja de la que se suben los ficheros)."
+        )
+    }
+
+
+@mcp.tool()
+def list_pending_attachments() -> dict:
+    """Muestra la bandeja de adjuntos: la carpeta donde hay que copiar un
+    fichero (con `install -m 644 <fichero> <bandeja>/`) antes de subirlo
+    con `add_attachments`, y los ficheros que hay ahora en ella. Solo
+    lectura."""
+    if _inbox is None:
+        return _attachments_unavailable()
+    try:
+        files = _inbox.list()
+    except AttachmentError as e:
+        return {"error": str(e)}
+    return {
+        "dir": _inbox.directory,
+        "windows_dir": _inbox.windows_dir,
+        "max_bytes": _inbox.max_bytes,
+        "files": files,
+    }
+
+
+@mcp.tool()
+def add_attachments(
+    issue_key: str,
+    filenames: list[str],
+    sha256: list[str] | None = None,
+    confirm: bool = False,
+) -> dict:
+    """Adjunta ficheros (capturas, PDFs, logs) a un issue del proyecto.
+
+    Los ficheros tienen que estar en la bandeja de adjuntos: pide su ruta
+    con `list_pending_attachments`, cópialos ahí primero con
+    `install -m 644 <fichero> <bandeja>/` (así el gateway puede leerlos) y
+    pasa solo el nombre, nunca una ruta. Tipos: png, jpg, gif, webp, pdf, txt, log.
+    Tras subirlos, se borran de la bandeja.
+
+    IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
+    envía nada, solo devuelve una vista previa con el tamaño, el tipo y el
+    sha256 de cada fichero, y la ruta para abrirlo. Pide al usuario que
+    ABRA Y MIRE cada fichero antes de aprobar (una captura puede mostrar
+    tokens o datos de clientes), no basta con el nombre. Solo si lo
+    aprueba, vuelve a llamar con confirm=True, los mismos ficheros y la
+    lista `sha256` del preview, en el mismo orden: si un fichero ha
+    cambiado desde el preview, no se sube nada."""
+    if _inbox is None:
+        return _attachments_unavailable()
+
+    try:
+        validate_issue_key(issue_key, _cfg.project_key)
+        names = validate_filenames(filenames)
+        files = [_inbox.read(n) for n in names]
+    except (AttachmentError, JiraError) as e:
+        return {"error": str(e)}
+
+    if not confirm:
+        return {
+            "preview": True,
+            "issue_key": issue_key,
+            "files": [
+                {**f.summary(), "path": _inbox.path(f.filename), "windows_path": _inbox.windows_path(f.filename)}
+                for f in files
+            ],
+            "sha256": [f.sha256 for f in files],
+            "note": (
+                "Nada se ha enviado a Jira todavía. Pide al usuario que abra y "
+                "revise cada fichero (no solo el nombre) y, si lo aprueba, llama "
+                "de nuevo con confirm=True, los mismos ficheros y esta lista "
+                "sha256. Un adjunto no se puede editar, y quien siga la tarea "
+                "recibe un aviso al momento."
+            ),
+        }
+
+    if sha256 is None or len(sha256) != len(files):
+        return {"error": "con confirm=True hay que pasar la lista sha256 del preview, un valor por fichero."}
+    changed = [f.filename for f, expected in zip(files, sha256) if f.sha256 != expected]
+    if changed:
+        return {
+            "error": (
+                f"estos ficheros han cambiado desde el preview: {', '.join(changed)}. "
+                "No se ha subido nada; vuelve a pedir el preview y que el usuario lo revise."
+            )
+        }
+
+    try:
+        attachments = _jira.add_attachments(issue_key, [(f.filename, f.content, f.mime_type) for f in files])
+    except JiraError as e:
+        return {"error": str(e)}
+
+    result = {
+        "created": True,
+        "issue_key": issue_key,
+        "url": f"{_cfg.jira_site_url}/browse/{issue_key}",
+        "attachments": attachments,
+    }
+    not_removed = []
+    for f in files:
+        try:
+            _inbox.remove(f.filename)
+        except (AttachmentError, OSError):
+            not_removed.append(f.filename)
+    if not_removed:
+        result["warning"] = (
+            f"subidos, pero no pude borrarlos de la bandeja: {', '.join(not_removed)}. "
+            "Bórralos a mano para no volver a subirlos por error."
+        )
+    return result
 
 
 _WORKLOG_ESTIMATE_NOTE = (

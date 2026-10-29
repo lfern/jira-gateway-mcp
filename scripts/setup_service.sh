@@ -59,6 +59,9 @@ SVC_USER="jira-gw-$SLUG"
 SVC_HOME="/opt/jira-gateway-$SLUG"
 UNIT_NAME="jira-gateway-$SLUG.service"
 SVC_ENV="$SVC_HOME/.env"
+# Bandeja de adjuntos: fuera de /home (el servicio corre con ProtectHome) y
+# fuera de $SVC_HOME (tu usuario no puede entrar ahí).
+INBOX_DIR="/srv/jira-gateway-inbox-$SLUG"
 PORT="${MCP_PORT:-8765}"
 
 echo "==> 1. Usuario y directorio de servicio ($SVC_USER, $SVC_HOME)"
@@ -140,6 +143,34 @@ if ! grep -q '^MCP_TRANSPORT=' "$SVC_ENV"; then
   } >> "$SVC_ENV"
 fi
 
+echo "==> Bandeja de adjuntos ($INBOX_DIR)"
+# Propiedad de tu usuario y grupo del servicio, con setgid: lo que copies
+# ahí queda en el grupo del servicio, que puede leerlo y borrarlo tras
+# subirlo. Nadie más entra.
+OWNER="${SUDO_USER:-}"
+if [[ -z "$OWNER" || "$OWNER" == "root" ]]; then
+  echo "    sin SUDO_USER (¿lanzado como root directamente?): no creo la bandeja."
+else
+  mkdir -p "$INBOX_DIR"
+  chown "$OWNER":"$SVC_USER" "$INBOX_DIR"
+  chmod 2770 "$INBOX_DIR"
+  echo "    lista: propiedad de $OWNER, grupo $SVC_USER (2770)."
+  if ! grep -q '^JIRA_ATTACHMENTS_DIR=' "$SVC_ENV"; then
+    {
+      echo ""
+      echo "# Bandeja de adjuntos (add_attachments). Ver README."
+      echo "JIRA_ATTACHMENTS_DIR=$INBOX_DIR"
+      echo "JIRA_ATTACHMENTS_MAX_MB=10"
+      # Solo el nombre de la distro: el gateway arma con él la ruta de
+      # Windows. Una ruta con barras invertidas no sirve aquí, porque
+      # systemd (EnvironmentFile) las trata como escapes y se las come.
+      if command -v wslpath &>/dev/null; then
+        echo "WSL_DISTRO_NAME=$(wslpath -w / | awk -F'\\\\' '{print $4}')"
+      fi
+    } >> "$SVC_ENV"
+  fi
+fi
+
 echo "==> Unidad systemd"
 cat > "/etc/systemd/system/$UNIT_NAME" <<UNIT
 [Unit]
@@ -159,7 +190,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=$SVC_HOME
+ReadWritePaths=$SVC_HOME -$INBOX_DIR
 
 [Install]
 WantedBy=multi-user.target

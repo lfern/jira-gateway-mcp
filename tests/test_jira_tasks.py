@@ -22,6 +22,17 @@ def _issue(key="PROJ-7", project="PROJ", assignee=None, description=None, summar
             "assignee": assignee,
             "labels": ["backend"],
             "parent": {"key": "PROJ-1", "fields": {"summary": "Épica"}},
+            "attachment": [
+                {
+                    "id": "10001",
+                    "filename": "captura.png",
+                    "size": 2048,
+                    "mimeType": "image/png",
+                    "author": {"displayName": "Ana"},
+                    "created": "2026-10-29T10:00:00.000+0100",
+                    "content": "https://example.atlassian.net/rest/api/3/attachment/content/10001",
+                }
+            ],
         },
     }
 
@@ -62,6 +73,16 @@ def test_get_issue_returns_markdown_and_fields(client):
         "assignee": "Ana",
         "labels": ["backend"],
         "parent": {"key": "PROJ-1", "summary": "Épica"},
+        "attachments": [
+            {
+                "id": "10001",
+                "filename": "captura.png",
+                "size": 2048,
+                "mime_type": "image/png",
+                "author": "Ana",
+                "created": "2026-10-29T10:00:00.000+0100",
+            }
+        ],
     }
 
 

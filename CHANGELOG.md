@@ -39,6 +39,17 @@ git.
   para los revisores explícitos.
 - `create_pull_request` y `get_pull_request` devuelven `reviewers` (nombre
   y `account_id`).
+- Adjuntos: `add_attachments` (confirmación en dos pasos) sube ficheros a
+  una tarea, y `list_pending_attachments` muestra la bandeja. Solo sube
+  ficheros de la bandeja (`JIRA_ATTACHMENTS_DIR`), por nombre y nunca por
+  ruta, para que el gateway no pueda subir su propio `.env`. Sin enlaces
+  simbólicos ni hard links, tipos fijos (png, jpg, gif, webp, pdf, txt,
+  log) y tamaño máximo (`JIRA_ATTACHMENTS_MAX_MB`, 10 por defecto). El
+  preview da el sha256 de cada fichero y al confirmar se comprueba de
+  nuevo. Tras subirlos, se borran de la bandeja.
+- `get_task` incluye los adjuntos de la tarea.
+- `setup_service.sh` crea la bandeja `/srv/jira-gateway-inbox-<empresa>`
+  y le da acceso al servicio.
 
 ### Cambiado
 - Las transiciones (`start_task`, `transition_task`, y el paso automático

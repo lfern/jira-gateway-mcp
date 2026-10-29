@@ -35,6 +35,19 @@ def _require(name: str) -> str:
     return val
 
 
+def _int_env(name: str, default: int) -> int:
+    val = os.environ.get(name)
+    if not val:
+        return default
+    try:
+        number = int(val)
+    except ValueError:
+        raise ConfigError(f"{name} tiene que ser un número entero: {val!r}")
+    if number <= 0:
+        raise ConfigError(f"{name} tiene que ser mayor que 0")
+    return number
+
+
 @dataclass
 class Config:
     jira_email: str
@@ -68,6 +81,15 @@ class Config:
     # estados configurados arriba (in_progress/selected) se permiten
     # siempre: los fija quien despliega, no el agente.
     jira_allowed_statuses: tuple[str, ...] = ()
+    # Bandeja de adjuntos (opcional): única carpeta de la que add_attachments
+    # sube ficheros. Vacía = las tools de adjuntos fallan siempre. Nunca se
+    # aceptan rutas libres (ver gateway/attachments.py).
+    jira_attachments_dir: str | None = None
+    jira_attachments_max_mb: int = 10
+    # Ruta de la bandeja vista desde Windows (\\wsl.localhost\...), para
+    # que el preview dé un enlace que se abre con un clic. Opcional: en WSL
+    # se deduce de WSL_DISTRO_NAME si existe.
+    jira_attachments_windows_dir: str | None = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -102,6 +124,9 @@ class Config:
             bitbucket_allowed_pipelines=allowed_pipelines,
             bitbucket_allowed_reviewers=allowed_reviewers,
             jira_allowed_statuses=allowed_statuses,
+            jira_attachments_dir=os.environ.get("JIRA_ATTACHMENTS_DIR") or None,
+            jira_attachments_max_mb=_int_env("JIRA_ATTACHMENTS_MAX_MB", 10),
+            jira_attachments_windows_dir=os.environ.get("JIRA_ATTACHMENTS_WINDOWS_DIR") or None,
         )
 
     @property

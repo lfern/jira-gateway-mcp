@@ -156,6 +156,17 @@ def _adf_to_text(node: dict) -> str:
     return text
 
 
+def _compact_attachment(a: dict) -> dict:
+    return {
+        "id": a.get("id"),
+        "filename": a.get("filename"),
+        "size": a.get("size"),
+        "mime_type": a.get("mimeType"),
+        "author": (a.get("author") or {}).get("displayName"),
+        "created": a.get("created"),
+    }
+
+
 class JiraClient:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -244,7 +255,7 @@ class JiraClient:
 
     def get_issue(self, issue_key: str) -> dict:
         fields = self._get_issue_fields(
-            issue_key, ["summary", "description", "status", "assignee", "labels", "parent"]
+            issue_key, ["summary", "description", "status", "assignee", "labels", "parent", "attachment"]
         )
         description, unsupported = adf_to_markdown(fields.get("description"))
         assignee = fields.get("assignee")
@@ -263,6 +274,7 @@ class JiraClient:
                 if parent
                 else None
             ),
+            "attachments": [_compact_attachment(a) for a in fields.get("attachment") or []],
         }
 
     def update_issue(
@@ -564,3 +576,42 @@ class JiraClient:
         )
         if not resp.ok:
             raise JiraError(f"Jira {resp.status_code} al borrar el worklog {worklog_id}: {resp.text}")
+
+    # --- adjuntos ----------------------------------------------------------------
+
+    def add_attachments(self, issue_key: str, files: list[tuple[str, bytes, str]]) -> list[dict]:
+        """Sube ficheros (nombre, contenido, tipo MIME) a un issue. Requiere
+        que el llamante ya haya confirmado — esta función no pregunta nada,
+        solo ejecuta. No lee del disco: el contenido lo da el llamante."""
+        self._get_issue_fields(issue_key, [])
+
+        resp = requests.get(
+            f"{self.cfg.jira_api_base}/rest/api/3/attachment/meta",
+            headers=self._headers(),
+            timeout=15,
+        )
+        if not resp.ok:
+            raise JiraError(f"no pude leer la config de adjuntos de Jira: {resp.status_code}")
+        meta = resp.json()
+        if not meta.get("enabled"):
+            raise JiraError("los adjuntos están desactivados en este Jira")
+        limit = meta.get("uploadLimit")
+        for name, content, _ in files:
+            if limit and len(content) > limit:
+                raise JiraError(f"{name} ocupa {len(content)} bytes, más que el límite de Jira ({limit})")
+
+        # Sin Content-Type: requests lo pone con el boundary del multipart.
+        # X-Atlassian-Token es obligatoria en este endpoint (protección XSRF).
+        resp = requests.post(
+            f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/attachments",
+            headers={
+                "Authorization": self.cfg.auth_header,
+                "Accept": "application/json",
+                "X-Atlassian-Token": "no-check",
+            },
+            files=[("file", (name, content, mime)) for name, content, mime in files],
+            timeout=60,
+        )
+        if not resp.ok:
+            raise JiraError(f"Jira {resp.status_code} al adjuntar en {issue_key}: {resp.text}")
+        return [_compact_attachment(a) for a in resp.json()]
