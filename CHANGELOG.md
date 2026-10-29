@@ -8,6 +8,8 @@ git.
 
 ## [Sin publicar]
 
+## [0.5.0] - 2026-10-29
+
 ### Añadido
 - `list_my_tasks` y `list_unassigned_tasks` aceptan `statuses` opcional
   para filtrar por estado. No es JQL libre: solo nombres de estado
@@ -154,6 +156,8 @@ git.
   libre. `start_task` estaba escrito pero no quedaba registrado como tool
   (corregido en la 0.2.0).
 
+[Sin publicar]: https://github.com/lfern/jira-gateway-mcp/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lfern/jira-gateway-mcp/compare/2e32e09...v0.3.0
 [0.2.0]: https://github.com/lfern/jira-gateway-mcp/compare/cb281c7...2e32e09
