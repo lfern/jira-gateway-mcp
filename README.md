@@ -90,6 +90,18 @@ del servicio (`2770`), y la añade al `.env`. Si un fichero llega sin
 permiso de lectura para el grupo (por ejemplo, copiado desde uno con modo
 `600`), la tool lo dice: `chmod g+r` y listo.
 
+En modo stdio el gateway corre con tu usuario, así que la bandeja puede
+estar donde quieras, también en tu `/home`:
+
+```bash
+mkdir -p ~/jira-inbox
+echo "JIRA_ATTACHMENTS_DIR=$HOME/jira-inbox" >> ~/.secrets/jira-gateway.env
+```
+
+Permisos en Jira: el usuario del token necesita el permiso de proyecto
+*Create attachments*. Con el scope clásico `write:jira-work` basta; con
+scopes granulares hace falta además `write:attachment:jira`.
+
 Bitbucket es **opcional**: si no añades estas variables, el gateway arranca
 igual solo con Jira, y las tools de Bitbucket devuelven un error explicando
 qué falta. Ver las secciones
@@ -299,6 +311,22 @@ reales y reinicia el servicio para que los recoja:
 ```bash
 sudo systemctl restart jira-gateway-<empresa>.service
 ```
+
+### Añadir adjuntos a una instalación ya desplegada
+
+Aquí sí basta con volver a lanzar el script: crea la bandeja
+`/srv/jira-gateway-inbox-<empresa>` y, si el `.env` no tiene ya
+`JIRA_ATTACHMENTS_DIR`, añade las variables de
+[Adjuntos](#adjuntos-opcional). Luego reinicia el servicio:
+
+```bash
+sudo bash scripts/setup_service.sh <empresa>
+sudo grep -E 'ATTACHMENTS|WSL_DISTRO' /opt/jira-gateway-<empresa>/.env   # comprueba que están
+sudo systemctl restart jira-gateway-<empresa>.service
+```
+
+En Claude Code, reconecta el MCP (`/mcp`) o abre una sesión nueva para que
+vea `add_attachments` y `list_pending_attachments`.
 
 ### Añadir Pipelines a una instalación que ya tiene Bitbucket (PRs)
 
