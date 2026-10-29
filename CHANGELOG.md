@@ -61,6 +61,14 @@ git.
 - `create_task` y `update_task` rechazan etiquetas con espacios antes de
   llamar a Jira.
 
+### Corregido
+- `add_comment` convierte el texto de markdown al formato de Jira (ADF),
+  igual que las descripciones. Antes iba todo en un solo párrafo de texto
+  plano, así que listas, títulos y `**` salían como caracteres sueltos.
+- `create_pull_request` ya no toma un PR mergeado como el PR abierto de la
+  rama: con `q`, Bitbucket ignora el parámetro `state`, así que el estado
+  va ahora dentro de la query.
+
 ## [0.4.0] - 2026-10-09
 
 ### Añadido

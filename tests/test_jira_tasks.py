@@ -428,3 +428,33 @@ def test_update_task_labels_already_applied_is_noop(server):
 
 def test_update_task_rejects_label_with_spaces(server):
     assert "etiqueta inválida" in server.update_task("PROJ-7", add_labels=["con espacio"])["error"]
+
+
+# --- add_comment -----------------------------------------------------------------
+
+
+@responses.activate
+def test_add_comment_converts_markdown_to_adf(client):
+    responses.add(responses.POST, f"{BASE}/issue/PROJ-7/comment", json={"id": "500"})
+
+    result = client.add_comment("PROJ-7", "## Hecho\n\n- uno\n- **dos**")
+
+    body = json.loads(responses.calls[0].request.body)["body"]
+    assert [n["type"] for n in body["content"]] == ["heading", "bulletList"]
+    assert body["content"][1]["content"][1]["content"][0]["content"][0]["marks"] == [{"type": "strong"}]
+    assert result == {"id": "500", "url": "https://example.atlassian.net/browse/PROJ-7?focusedCommentId=500"}
+
+
+@responses.activate
+def test_add_comment_keeps_line_breaks(client):
+    responses.add(responses.POST, f"{BASE}/issue/PROJ-7/comment", json={"id": "500"})
+
+    client.add_comment("PROJ-7", "línea 1\nlínea 2")
+
+    paragraph = json.loads(responses.calls[0].request.body)["body"]["content"][0]
+    assert [n["type"] for n in paragraph["content"]] == ["text", "hardBreak", "text"]
+
+
+def test_add_comment_rejects_other_project_without_calling_jira(client):
+    with pytest.raises(JiraError):
+        client.add_comment("OTRO-1", "hola")

@@ -328,7 +328,9 @@ def list_task_comments(issue_key: str) -> list[dict]:
 
 @mcp.tool()
 def add_comment(issue_key: str, body: str, confirm: bool = False) -> dict:
-    """Añade un comentario a un issue de Jira.
+    """Añade un comentario a un issue de Jira. El texto va en markdown
+    (títulos, listas, negrita, código, enlaces...) y se convierte al
+    formato de Jira; las tablas no se soportan y salen como texto.
 
     IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
     envía nada, solo devuelve una vista previa del comentario — muéstrasela

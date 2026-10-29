@@ -454,7 +454,7 @@ class JiraClient:
         resp = requests.post(
             f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/comment",
             headers=self._headers(),
-            json={"body": _text_to_adf(body)},
+            json={"body": markdown_to_adf(body)},
             timeout=15,
         )
         if not resp.ok:
