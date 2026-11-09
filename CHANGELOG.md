@@ -8,6 +8,8 @@ git.
 
 ## [Sin publicar]
 
+## [0.6.0] - 2026-11-09
+
 ### Añadido
 - `add_comment` acepta `mention_me` (por defecto `false`): el comentario
   empieza con una mención ADF al usuario del gateway. Su accountId sale de
@@ -162,7 +164,8 @@ git.
   libre. `start_task` estaba escrito pero no quedaba registrado como tool
   (corregido en la 0.2.0).
 
-[Sin publicar]: https://github.com/lfern/jira-gateway-mcp/compare/v0.5.0...HEAD
+[Sin publicar]: https://github.com/lfern/jira-gateway-mcp/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/lfern/jira-gateway-mcp/compare/2e32e09...v0.3.0
