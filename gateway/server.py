@@ -63,7 +63,8 @@ _bitbucket = BitbucketClient(_cfg) if _cfg.bitbucket_configured else None
 def list_my_tasks(statuses: list[str] | None = None) -> list[dict]:
     """Lista tus tareas asignadas y no cerradas en el proyecto configurado.
     Con `statuses` (ej. ['Selected for Development']), solo las que estén en
-    alguno de esos estados (nombre exacto del estado en Jira). Solo lectura.
+    alguno de esos estados (nombre exacto del estado en Jira). Devuelve
+    clave, resumen, estado y labels. Solo lectura.
     No acepta JQL: el filtro está fijado y solo admite nombres de estado."""
     try:
         return _jira.list_my_tasks(statuses)
@@ -75,8 +76,9 @@ def list_my_tasks(statuses: list[str] | None = None) -> list[dict]:
 def list_unassigned_tasks(statuses: list[str] | None = None) -> list[dict]:
     """Lista las tareas sin asignar y no cerradas en el proyecto configurado.
     Con `statuses`, solo las que estén en alguno de esos estados (nombre
-    exacto del estado en Jira). Solo lectura. No acepta JQL: el filtro está
-    fijado y solo admite nombres de estado."""
+    exacto del estado en Jira). Devuelve clave, resumen, estado y labels.
+    Solo lectura. No acepta JQL: el filtro está fijado y solo admite
+    nombres de estado."""
     try:
         return _jira.list_unassigned_tasks(statuses)
     except JiraError as e:
@@ -327,10 +329,12 @@ def list_task_comments(issue_key: str) -> list[dict]:
 
 
 @mcp.tool()
-def add_comment(issue_key: str, body: str, confirm: bool = False) -> dict:
+def add_comment(issue_key: str, body: str, mention_me: bool = False, confirm: bool = False) -> dict:
     """Añade un comentario a un issue de Jira. El texto va en markdown
     (títulos, listas, negrita, código, enlaces...) y se convierte al
     formato de Jira; las tablas no se soportan y salen como texto.
+    Con mention_me=True, el comentario empieza con una mención (@) al
+    usuario del gateway, para que le llegue la notificación.
 
     IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
     envía nada, solo devuelve una vista previa del comentario — muéstrasela
@@ -341,6 +345,7 @@ def add_comment(issue_key: str, body: str, confirm: bool = False) -> dict:
             "preview": True,
             "issue_key": issue_key,
             "body": body,
+            "mention_me": mention_me,
             "note": (
                 "Nada se ha enviado a Jira todavía. Revisa este preview con "
                 "el usuario y, si lo aprueba, llama de nuevo con confirm=True "
@@ -349,7 +354,7 @@ def add_comment(issue_key: str, body: str, confirm: bool = False) -> dict:
         }
 
     try:
-        result = _jira.add_comment(issue_key, body)
+        result = _jira.add_comment(issue_key, body, mention_me=mention_me)
     except JiraError as e:
         return {"error": str(e)}
 

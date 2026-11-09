@@ -8,6 +8,12 @@ git.
 
 ## [Sin publicar]
 
+### Añadido
+- `add_comment` acepta `mention_me` (por defecto `false`): el comentario
+  empieza con una mención ADF al usuario del gateway. Su accountId sale de
+  `/rest/api/3/myself` y se cachea.
+- `list_my_tasks` y `list_unassigned_tasks` devuelven también `labels`.
+
 ## [0.5.0] - 2026-10-29
 
 ### Añadido

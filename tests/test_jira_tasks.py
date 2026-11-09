@@ -293,6 +293,25 @@ def test_list_unassigned_tasks_without_statuses_keeps_fixed_jql(client):
     )
 
 
+@responses.activate
+def test_list_tasks_returns_labels(client):
+    responses.add(
+        responses.GET,
+        f"{BASE}/search/jql",
+        json={
+            "issues": [
+                {"key": "PROJ-1", "fields": {"summary": "a", "status": {"name": "To Do"}, "labels": ["backend"]}},
+                {"key": "PROJ-2", "fields": {"summary": "b", "status": {"name": "To Do"}}},
+            ]
+        },
+    )
+
+    tasks = client.list_unassigned_tasks()
+
+    assert responses.calls[0].request.params["fields"] == "summary,status,labels"
+    assert [t["labels"] for t in tasks] == [["backend"], []]
+
+
 @pytest.mark.parametrize(
     "bad",
     ['Done" OR project = OTRO OR status = "x', "a\\b", "", "x' OR 1=1", "a\nb"],
@@ -453,6 +472,48 @@ def test_add_comment_keeps_line_breaks(client):
 
     paragraph = json.loads(responses.calls[0].request.body)["body"]["content"][0]
     assert [n["type"] for n in paragraph["content"]] == ["text", "hardBreak", "text"]
+
+
+@responses.activate
+def test_add_comment_mention_me_goes_inside_first_paragraph(client):
+    _add_me()
+    responses.add(responses.POST, f"{BASE}/issue/PROJ-7/comment", json={"id": "500"})
+
+    client.add_comment("PROJ-7", "revisa esto", mention_me=True)
+
+    paragraph = json.loads(responses.calls[1].request.body)["body"]["content"][0]
+    assert paragraph["content"] == [
+        {"type": "mention", "attrs": {"id": ME}},
+        {"type": "text", "text": " "},
+        {"type": "text", "text": "revisa esto"},
+    ]
+
+
+@responses.activate
+def test_add_comment_mention_me_before_non_paragraph_and_caches_account(client):
+    _add_me()
+    responses.add(responses.POST, f"{BASE}/issue/PROJ-7/comment", json={"id": "500"})
+
+    client.add_comment("PROJ-7", "## Hecho", mention_me=True)
+    client.add_comment("PROJ-7", "", mention_me=True)
+
+    first = json.loads(responses.calls[1].request.body)["body"]["content"]
+    assert first[0] == {"type": "paragraph", "content": [{"type": "mention", "attrs": {"id": ME}}]}
+    assert first[1]["type"] == "heading"
+    second = json.loads(responses.calls[2].request.body)["body"]["content"]
+    assert second == [{"type": "paragraph", "content": [{"type": "mention", "attrs": {"id": ME}}]}]
+    assert sum(c.request.url.endswith("/myself") for c in responses.calls) == 1
+
+
+@responses.activate
+def test_add_comment_without_mention_does_not_call_myself(client):
+    responses.add(responses.POST, f"{BASE}/issue/PROJ-7/comment", json={"id": "500"})
+
+    client.add_comment("PROJ-7", "hola")
+
+    assert len(responses.calls) == 1
+    first = json.loads(responses.calls[0].request.body)["body"]["content"][0]["content"][0]
+    assert first["type"] == "text"
 
 
 def test_add_comment_rejects_other_project_without_calling_jira(client):

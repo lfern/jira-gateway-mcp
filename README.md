@@ -457,6 +457,7 @@ falta ir a adivinarlo desde un 403 pelado.
 1. "¿Qué tareas tengo pendientes?" → `list_my_tasks`. "¿Cuáles tengo en
    Selected for Development?" → `list_my_tasks` con
    `statuses=["Selected for Development"]` (igual en `list_unassigned_tasks`).
+   Las dos devuelven clave, resumen, estado y labels.
 2. "Crea una tarea para X" → `create_task` (sin `confirm`) → el agente te
    enseña el preview (proyecto, tipo, resumen, descripción, etiquetas) → si
    dices que sí, el agente vuelve a llamar a `create_task` con `confirm=True`
@@ -487,7 +488,9 @@ falta ir a adivinarlo desde un 403 pelado.
    lectura, autor/fecha/texto en orden cronológico).
 9. "Comenta en la PROJ-123 que..." → `add_comment` (sin `confirm`) → el
    agente te enseña el preview del texto → si dices que sí, vuelve a llamar
-   con `confirm=True` para publicarlo.
+   con `confirm=True` para publicarlo. Con `mention_me=True` el comentario
+   empieza con una mención (@) a ti, el usuario del gateway, para que te
+   llegue la notificación de Jira.
 10. "Apunta 1h 30m en la PROJ-123 de ayer" → `add_worklog` con
    `time_spent="1h 30m"` y `started="YYYY-MM-DD"` (sin `confirm`) → preview
    → `confirm=True`. Solo horas y minutos (`2h`, `45m`, `1h 30m`, `1.5h`),

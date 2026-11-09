@@ -167,6 +167,19 @@ def _compact_attachment(a: dict) -> dict:
     }
 
 
+def _prepend_mention(doc: dict, account_id: str) -> None:
+    """Pone una mención a `account_id` al principio del documento: dentro
+    del primer párrafo si el comentario empieza por uno, o en un párrafo
+    propio si empieza por otra cosa (título, lista, código...)."""
+    mention = {"type": "mention", "attrs": {"id": account_id}}
+    blocks = doc["content"]
+    if blocks and blocks[0]["type"] == "paragraph":
+        rest = blocks[0].get("content") or []
+        blocks[0]["content"] = [mention, {"type": "text", "text": " "}, *rest] if rest else [mention]
+    else:
+        blocks.insert(0, {"type": "paragraph", "content": [mention]})
+
+
 class JiraClient:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -373,7 +386,7 @@ class JiraClient:
         resp = requests.get(
             f"{self.cfg.jira_api_base}/rest/api/3/search/jql",
             headers=self._headers(),
-            params={"jql": jql, "fields": "summary,status"},
+            params={"jql": jql, "fields": "summary,status,labels"},
             timeout=15,
         )
         if not resp.ok:
@@ -385,6 +398,7 @@ class JiraClient:
                 "key": i["key"],
                 "summary": i["fields"]["summary"],
                 "status": i["fields"]["status"]["name"],
+                "labels": i["fields"].get("labels") or [],
             }
             for i in issues
         ]
@@ -446,15 +460,20 @@ class JiraClient:
             for c in comments
         ]
 
-    def add_comment(self, issue_key: str, body: str) -> dict:
+    def add_comment(self, issue_key: str, body: str, mention_me: bool = False) -> dict:
         """Añade un comentario. Requiere que el llamante ya haya confirmado —
-        esta función no pregunta nada, solo ejecuta."""
+        esta función no pregunta nada, solo ejecuta. Con `mention_me`, el
+        comentario empieza mencionando al usuario del gateway."""
         validate_issue_key(issue_key, self.cfg.project_key)
+
+        adf = markdown_to_adf(body)
+        if mention_me:
+            _prepend_mention(adf, self._current_account_id())
 
         resp = requests.post(
             f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/comment",
             headers=self._headers(),
-            json={"body": markdown_to_adf(body)},
+            json={"body": adf},
             timeout=15,
         )
         if not resp.ok:
