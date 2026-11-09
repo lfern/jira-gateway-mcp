@@ -8,6 +8,9 @@ git.
 
 ## [Sin publicar]
 
+### Cambiado
+- README: el ejemplo de instalación con `uvx` apunta a `v0.6.0`.
+
 ## [0.6.0] - 2026-11-09
 
 ### Añadido
