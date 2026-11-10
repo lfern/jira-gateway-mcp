@@ -8,6 +8,8 @@ git.
 
 ## [Sin publicar]
 
+## [0.7.0] - 2026-11-10
+
 ### Añadido
 - `add_comment` acepta `mention` (ej. `["jorge"]`): el comentario empieza
   mencionando a esas personas. Solo alias de `JIRA_MENTION_USERS`
@@ -17,7 +19,7 @@ git.
 - `JIRA_MENTION_USERS` (opcional): lista cerrada de personas mencionables.
 
 ### Cambiado
-- README: el ejemplo de instalación con `uvx` apunta a `v0.6.0`.
+- README: el ejemplo de instalación con `uvx` apunta a `v0.7.0`.
 
 ## [0.6.0] - 2026-11-09
 
@@ -175,7 +177,8 @@ git.
   libre. `start_task` estaba escrito pero no quedaba registrado como tool
   (corregido en la 0.2.0).
 
-[Sin publicar]: https://github.com/lfern/jira-gateway-mcp/compare/v0.6.0...HEAD
+[Sin publicar]: https://github.com/lfern/jira-gateway-mcp/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.3.0...v0.4.0
