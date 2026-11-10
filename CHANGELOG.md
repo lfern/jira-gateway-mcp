@@ -8,7 +8,10 @@ git.
 
 ## [Sin publicar]
 
+## [0.8.0] - 2026-11-10
+
 ### Cambiado
+- README: el ejemplo de instalación con `uvx` apunta a `v0.8.0`.
 - `mention` en `add_comment` busca a las personas por nombre en Jira
   (`/user/viewissue/search`, entre quienes pueden ver la tarea), sin
   configurar nada en el gateway. El preview enseña el nombre completo de
@@ -189,7 +192,8 @@ git.
   libre. `start_task` estaba escrito pero no quedaba registrado como tool
   (corregido en la 0.2.0).
 
-[Sin publicar]: https://github.com/lfern/jira-gateway-mcp/compare/v0.7.0...HEAD
+[Sin publicar]: https://github.com/lfern/jira-gateway-mcp/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/lfern/jira-gateway-mcp/compare/v0.4.0...v0.5.0

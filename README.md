@@ -183,13 +183,13 @@ caché (con su propio Python 3.11+ si hace falta) y lanza el comando
   "mcpServers": {
     "jira-gateway": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/lfern/jira-gateway-mcp@v0.7.0", "jira-gateway"]
+      "args": ["--from", "git+https://github.com/lfern/jira-gateway-mcp@v0.8.0", "jira-gateway"]
     }
   }
 }
 ```
 
-Fijar el tag (`@v0.7.0`) evita que cambie de versión sin que lo decidas;
+Fijar el tag (`@v0.8.0`) evita que cambie de versión sin que lo decidas;
 para actualizar, cambia el tag. Si `uvx` no está en el `PATH` que ve
 Claude Code, pon la ruta absoluta (normalmente `~/.local/bin/uvx`).
 

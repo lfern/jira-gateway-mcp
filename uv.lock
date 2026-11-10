@@ -442,7 +442,7 @@ wheels = [
 
 [[package]]
 name = "jira-git-gateway"
-version = "0.7.0"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
