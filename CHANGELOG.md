@@ -8,6 +8,18 @@ git.
 
 ## [Sin publicar]
 
+### Cambiado
+- `mention` en `add_comment` busca a las personas por nombre en Jira
+  (`/user/viewissue/search`, entre quienes pueden ver la tarea), sin
+  configurar nada en el gateway. El preview enseña el nombre completo de
+  cada persona. Si un nombre coincide con varias, falla y las lista,
+  salvo que una se llame exactamente así. Ignora apps y usuarios
+  inactivos. Necesita el scope `read:jira-user` en el token de Jira.
+
+### Eliminado
+- `JIRA_MENTION_USERS`: ya no hace falta. Si la tienes en el `.env`, se
+  ignora.
+
 ## [0.7.0] - 2026-11-10
 
 ### Añadido

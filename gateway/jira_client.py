@@ -167,19 +167,6 @@ def _compact_attachment(a: dict) -> dict:
     }
 
 
-def resolve_mentions(aliases: list[str] | None, cfg: Config) -> list[str]:
-    """Traduce alias de JIRA_MENTION_USERS a accountId, en el mismo orden y
-    sin repetir. Un alias desconocido falla sin llamar a Jira."""
-    if not aliases:
-        return []
-    known = cfg.jira_mention_users
-    unknown = [a for a in aliases if a.strip().lower() not in known]
-    if unknown:
-        available = ", ".join(sorted(known)) or "ninguno (falta JIRA_MENTION_USERS en el .env)"
-        raise JiraError(f"no sé a quién mencionar con {unknown}. Alias disponibles: {available}")
-    return list(dict.fromkeys(known[a.strip().lower()] for a in aliases))
-
-
 def _prepend_mentions(doc: dict, account_ids: list[str]) -> None:
     """Pone menciones a `account_ids` al principio del documento: dentro
     del primer párrafo si el comentario empieza por uno, o en un párrafo
@@ -477,6 +464,56 @@ class JiraClient:
             for c in comments
         ]
 
+    def _find_user(self, issue_key: str, name: str) -> dict:
+        """Busca a una persona por nombre (o parte) entre quienes pueden ver
+        `issue_key`. Solo personas activas, no apps. Tiene que salir una:
+        si salen varias y ninguna se llama exactamente así, falla y dice
+        cuáles hay, para que el usuario elija."""
+        query = name.strip()
+        if not query:
+            raise JiraError("mention no admite nombres vacíos")
+        resp = requests.get(
+            f"{self.cfg.jira_api_base}/rest/api/3/user/viewissue/search",
+            headers=self._headers(),
+            params={"issueKey": issue_key, "query": query, "maxResults": 20},
+            timeout=15,
+        )
+        if resp.status_code in (401, 403):
+            raise JiraError(
+                f"Jira {resp.status_code} al buscar usuarios: probablemente al "
+                "token le falta el scope read:jira-user (lo necesita mention)."
+            )
+        if not resp.ok:
+            raise JiraError(f"no pude buscar usuarios para {issue_key}: {resp.status_code}")
+
+        people = [
+            u
+            for u in resp.json()
+            if u.get("active", True) and u.get("accountType", "atlassian") == "atlassian"
+        ]
+        exact = [u for u in people if (u.get("displayName") or "").lower() == query.lower()]
+        if len(exact) == 1:
+            people = exact
+        if not people:
+            raise JiraError(f"no encuentro a nadie que se llame '{query}' y pueda ver {issue_key}")
+        if len(people) > 1:
+            names = ", ".join(u.get("displayName") or "?" for u in people)
+            raise JiraError(
+                f"'{query}' coincide con varias personas: {names}. "
+                "Pregunta al usuario cuál es y usa su nombre completo."
+            )
+        return {"name": people[0].get("displayName"), "account_id": people[0]["accountId"]}
+
+    def resolve_mentions(self, issue_key: str, names: list[str] | None) -> list[dict]:
+        """Traduce nombres a personas de Jira ({name, account_id}), en el
+        mismo orden y sin repetir. Solo lectura."""
+        validate_issue_key(issue_key, self.cfg.project_key)
+        found: dict[str, dict] = {}
+        for name in names or []:
+            person = self._find_user(issue_key, name)
+            found.setdefault(person["account_id"], person)
+        return list(found.values())
+
     def add_comment(
         self,
         issue_key: str,
@@ -487,9 +524,9 @@ class JiraClient:
         """Añade un comentario. Requiere que el llamante ya haya confirmado —
         esta función no pregunta nada, solo ejecuta. Con `mention_me`, el
         comentario empieza mencionando al usuario del gateway; con
-        `mention`, a las personas de esos alias de JIRA_MENTION_USERS."""
+        `mention`, a esas personas (buscadas por nombre en Jira)."""
         validate_issue_key(issue_key, self.cfg.project_key)
-        others = resolve_mentions(mention, self.cfg)
+        others = [p["account_id"] for p in self.resolve_mentions(issue_key, mention)]
 
         adf = markdown_to_adf(body)
         account_ids = ([self._current_account_id()] if mention_me else []) + others

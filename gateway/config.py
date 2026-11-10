@@ -15,7 +15,7 @@ Claude Code.
 """
 import base64
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -33,21 +33,6 @@ def _require(name: str) -> str:
     if not val:
         raise ConfigError(f"falta la variable de entorno {name} (¿existe {_ENV_FILE}?)")
     return val
-
-
-def _mention_users_env(name: str) -> dict[str, str]:
-    """Lee `alias=accountId,alias2=accountId2`. Los alias se guardan en
-    minúsculas para que `Jorge` y `jorge` sean el mismo."""
-    users: dict[str, str] = {}
-    for item in os.environ.get(name, "").split(","):
-        if not item.strip():
-            continue
-        alias, sep, account_id = item.partition("=")
-        alias, account_id = alias.strip().lower(), account_id.strip()
-        if not sep or not alias or not account_id:
-            raise ConfigError(f"{name}: cada entrada tiene que ser alias=accountId, no {item.strip()!r}")
-        users[alias] = account_id
-    return users
 
 
 def _int_env(name: str, default: int) -> int:
@@ -96,10 +81,6 @@ class Config:
     # estados configurados arriba (in_progress/selected) se permiten
     # siempre: los fija quien despliega, no el agente.
     jira_allowed_statuses: tuple[str, ...] = ()
-    # Personas a las que add_comment puede mencionar con `mention`, como
-    # alias (en minúsculas) → accountId de Jira. Lista cerrada: el agente
-    # solo puede mencionar a quien esté aquí, nunca un accountId libre.
-    jira_mention_users: dict[str, str] = field(default_factory=dict)
     # Bandeja de adjuntos (opcional): única carpeta de la que add_attachments
     # sube ficheros. Vacía = las tools de adjuntos fallan siempre. Nunca se
     # aceptan rutas libres (ver gateway/attachments.py).
@@ -143,7 +124,6 @@ class Config:
             bitbucket_allowed_pipelines=allowed_pipelines,
             bitbucket_allowed_reviewers=allowed_reviewers,
             jira_allowed_statuses=allowed_statuses,
-            jira_mention_users=_mention_users_env("JIRA_MENTION_USERS"),
             jira_attachments_dir=os.environ.get("JIRA_ATTACHMENTS_DIR") or None,
             jira_attachments_max_mb=_int_env("JIRA_ATTACHMENTS_MAX_MB", 10),
             jira_attachments_windows_dir=os.environ.get("JIRA_ATTACHMENTS_WINDOWS_DIR") or None,

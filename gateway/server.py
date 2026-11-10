@@ -37,7 +37,6 @@ from .jira_client import (
     format_duration,
     parse_duration,
     parse_started,
-    resolve_mentions,
     validate_issue_key,
     validate_labels,
 )
@@ -342,27 +341,27 @@ def add_comment(
     formato de Jira; las tablas no se soportan y salen como texto.
     Con mention_me=True, el comentario empieza con una mención (@) al
     usuario del gateway, para que le llegue la notificación.
-    Con `mention` (ej. ['jorge']), el comentario empieza mencionando a esas
-    personas. Solo acepta alias definidos en JIRA_MENTION_USERS del .env,
-    nunca un accountId libre: con un alias desconocido falla y dice cuáles
-    hay.
+    Con `mention` (ej. ['Jorge']), el comentario empieza mencionando a esas
+    personas. Se buscan por nombre en Jira entre quienes pueden ver el
+    issue; si un nombre coincide con varias, falla y dice cuáles hay:
+    pregunta al usuario cuál es y repite con el nombre completo.
 
     IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
     envía nada, solo devuelve una vista previa del comentario — muéstrasela
     al usuario tal cual. Solo si el usuario la aprueba, vuelve a llamar con
     confirm=True y los mismos datos para publicarlo de verdad."""
-    try:
-        resolve_mentions(mention, _cfg)
-    except JiraError as e:
-        return {"error": str(e)}
-
     if not confirm:
+        try:
+            people = _jira.resolve_mentions(issue_key, mention) if mention else []
+        except JiraError as e:
+            return {"error": str(e)}
         return {
             "preview": True,
             "issue_key": issue_key,
             "body": body,
             "mention_me": mention_me,
-            "mention": mention or [],
+            # nombres completos de Jira: el usuario confirma a quién se avisa
+            "mention": [p["name"] for p in people],
             "note": (
                 "Nada se ha enviado a Jira todavía. Revisa este preview con "
                 "el usuario y, si lo aprueba, llama de nuevo con confirm=True "

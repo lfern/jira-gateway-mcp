@@ -517,17 +517,23 @@ def test_add_comment_without_mention_does_not_call_myself(client):
 
 
 JORGE = "557058:jorge"
+SEARCH = f"{BASE}/user/viewissue/search"
+
+
+def _user(account_id, name, active=True, account_type="atlassian"):
+    return {"accountId": account_id, "displayName": name, "active": active, "accountType": account_type}
 
 
 @responses.activate
-def test_add_comment_mention_by_alias(cfg):
-    client = JiraClient(make_config(jira_mention_users={"jorge": JORGE}))
+def test_add_comment_mention_by_name(client):
+    responses.add(responses.GET, SEARCH, json=[_user(JORGE, "Jorge Pérez")])
     responses.add(responses.POST, f"{BASE}/issue/PROJ-7/comment", json={"id": "500"})
 
-    client.add_comment("PROJ-7", "listo para validar", mention=["Jorge"])
+    client.add_comment("PROJ-7", "listo para validar", mention=["jorge"])
 
-    assert len(responses.calls) == 1  # sin mention_me no hace falta /myself
-    paragraph = json.loads(responses.calls[0].request.body)["body"]["content"][0]
+    assert responses.calls[0].request.params["issueKey"] == "PROJ-7"
+    assert responses.calls[0].request.params["query"] == "jorge"
+    paragraph = json.loads(responses.calls[1].request.body)["body"]["content"][0]
     assert paragraph["content"] == [
         {"type": "mention", "attrs": {"id": JORGE}},
         {"type": "text", "text": " "},
@@ -536,14 +542,16 @@ def test_add_comment_mention_by_alias(cfg):
 
 
 @responses.activate
-def test_add_comment_mention_me_and_others_without_duplicates(cfg):
-    client = JiraClient(make_config(jira_mention_users={"jorge": JORGE, "yo": ME}))
+def test_add_comment_mention_me_and_others_without_duplicates(client):
     _add_me()
+    responses.add(responses.GET, SEARCH, json=[_user(JORGE, "Jorge Pérez")])
+    responses.add(responses.GET, SEARCH, json=[_user(ME, "Yo")])
+    responses.add(responses.GET, SEARCH, json=[_user(JORGE, "Jorge Pérez")])
     responses.add(responses.POST, f"{BASE}/issue/PROJ-7/comment", json={"id": "500"})
 
-    client.add_comment("PROJ-7", "## Hecho", mention_me=True, mention=["jorge", "yo", "jorge"])
+    client.add_comment("PROJ-7", "## Hecho", mention_me=True, mention=["jorge", "yo", "Jorge Pérez"])
 
-    first = json.loads(responses.calls[1].request.body)["body"]["content"][0]
+    first = json.loads(responses.calls[-1].request.body)["body"]["content"][0]
     assert first == {
         "type": "paragraph",
         "content": [
@@ -554,11 +562,51 @@ def test_add_comment_mention_me_and_others_without_duplicates(cfg):
     }
 
 
-@pytest.mark.parametrize("users", [{}, {"jorge": JORGE}])
-def test_add_comment_unknown_mention_fails_without_calling_jira(users):
-    client = JiraClient(make_config(jira_mention_users=users))
-    with pytest.raises(JiraError, match="alias disponibles|Alias disponibles"):
-        client.add_comment("PROJ-7", "hola", mention=["557058:otro"])
+@responses.activate
+def test_resolve_mentions_skips_apps_and_inactive_users(client):
+    responses.add(
+        responses.GET,
+        SEARCH,
+        json=[
+            _user("bot", "Jorge Bot", account_type="app"),
+            _user("old", "Jorge Antiguo", active=False),
+            _user(JORGE, "Jorge Pérez"),
+        ],
+    )
+    assert client.resolve_mentions("PROJ-7", ["jorge"]) == [{"name": "Jorge Pérez", "account_id": JORGE}]
+
+
+@responses.activate
+def test_resolve_mentions_ambiguous_lists_candidates_unless_exact(client):
+    two = [_user(JORGE, "Jorge Pérez"), _user("557058:otro", "Jorge Martín")]
+    responses.add(responses.GET, SEARCH, json=two)
+    responses.add(responses.GET, SEARCH, json=two)
+
+    with pytest.raises(JiraError, match="Jorge Pérez, Jorge Martín"):
+        client.resolve_mentions("PROJ-7", ["jorge"])
+    assert client.resolve_mentions("PROJ-7", ["jorge pérez"])[0]["account_id"] == JORGE
+
+
+@responses.activate
+def test_add_comment_mention_unknown_fails_without_posting(client):
+    responses.add(responses.GET, SEARCH, json=[])
+
+    with pytest.raises(JiraError, match="no encuentro"):
+        client.add_comment("PROJ-7", "hola", mention=["nadie"])
+    assert len(responses.calls) == 1
+
+
+@responses.activate
+def test_resolve_mentions_forbidden_points_to_scope(client):
+    responses.add(responses.GET, SEARCH, status=403)
+
+    with pytest.raises(JiraError, match="read:jira-user"):
+        client.resolve_mentions("PROJ-7", ["jorge"])
+
+
+def test_resolve_mentions_rejects_other_project_without_calling_jira(client):
+    with pytest.raises(JiraError):
+        client.resolve_mentions("OTRO-1", ["jorge"])
 
 
 def test_add_comment_rejects_other_project_without_calling_jira(client):

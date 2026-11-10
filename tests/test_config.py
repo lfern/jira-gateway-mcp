@@ -51,21 +51,3 @@ def test_attachments_max_mb_must_be_positive_integer(monkeypatch):
         with pytest.raises(ConfigError):
             Config.from_env()
 
-
-def test_mention_users_from_env(monkeypatch):
-    import pytest
-
-    from gateway.config import Config, ConfigError
-
-    for name, value in _REQUIRED_ENV.items():
-        monkeypatch.setenv(name, value)
-    monkeypatch.setenv("JIRA_MENTION_USERS", " Jorge = 557058:aaa , ana=557058:bbb,")
-    assert Config.from_env().jira_mention_users == {"jorge": "557058:aaa", "ana": "557058:bbb"}
-
-    monkeypatch.delenv("JIRA_MENTION_USERS")
-    assert Config.from_env().jira_mention_users == {}
-
-    for bad in ("jorge", "jorge=", "=557058:aaa"):
-        monkeypatch.setenv("JIRA_MENTION_USERS", bad)
-        with pytest.raises(ConfigError):
-            Config.from_env()
