@@ -516,6 +516,51 @@ def test_add_comment_without_mention_does_not_call_myself(client):
     assert first["type"] == "text"
 
 
+JORGE = "557058:jorge"
+
+
+@responses.activate
+def test_add_comment_mention_by_alias(cfg):
+    client = JiraClient(make_config(jira_mention_users={"jorge": JORGE}))
+    responses.add(responses.POST, f"{BASE}/issue/PROJ-7/comment", json={"id": "500"})
+
+    client.add_comment("PROJ-7", "listo para validar", mention=["Jorge"])
+
+    assert len(responses.calls) == 1  # sin mention_me no hace falta /myself
+    paragraph = json.loads(responses.calls[0].request.body)["body"]["content"][0]
+    assert paragraph["content"] == [
+        {"type": "mention", "attrs": {"id": JORGE}},
+        {"type": "text", "text": " "},
+        {"type": "text", "text": "listo para validar"},
+    ]
+
+
+@responses.activate
+def test_add_comment_mention_me_and_others_without_duplicates(cfg):
+    client = JiraClient(make_config(jira_mention_users={"jorge": JORGE, "yo": ME}))
+    _add_me()
+    responses.add(responses.POST, f"{BASE}/issue/PROJ-7/comment", json={"id": "500"})
+
+    client.add_comment("PROJ-7", "## Hecho", mention_me=True, mention=["jorge", "yo", "jorge"])
+
+    first = json.loads(responses.calls[1].request.body)["body"]["content"][0]
+    assert first == {
+        "type": "paragraph",
+        "content": [
+            {"type": "mention", "attrs": {"id": ME}},
+            {"type": "text", "text": " "},
+            {"type": "mention", "attrs": {"id": JORGE}},
+        ],
+    }
+
+
+@pytest.mark.parametrize("users", [{}, {"jorge": JORGE}])
+def test_add_comment_unknown_mention_fails_without_calling_jira(users):
+    client = JiraClient(make_config(jira_mention_users=users))
+    with pytest.raises(JiraError, match="alias disponibles|Alias disponibles"):
+        client.add_comment("PROJ-7", "hola", mention=["557058:otro"])
+
+
 def test_add_comment_rejects_other_project_without_calling_jira(client):
     with pytest.raises(JiraError):
         client.add_comment("OTRO-1", "hola")

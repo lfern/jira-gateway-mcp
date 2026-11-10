@@ -8,6 +8,14 @@ git.
 
 ## [Sin publicar]
 
+### Añadido
+- `add_comment` acepta `mention` (ej. `["jorge"]`): el comentario empieza
+  mencionando a esas personas. Solo alias de `JIRA_MENTION_USERS`
+  (`alias=accountId`, separados por comas), nunca un accountId libre; un
+  alias desconocido falla ya en el preview. Se combina con `mention_me`
+  sin repetir menciones.
+- `JIRA_MENTION_USERS` (opcional): lista cerrada de personas mencionables.
+
 ### Cambiado
 - README: el ejemplo de instalación con `uvx` apunta a `v0.6.0`.
 

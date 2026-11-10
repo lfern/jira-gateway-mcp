@@ -37,6 +37,7 @@ from .jira_client import (
     format_duration,
     parse_duration,
     parse_started,
+    resolve_mentions,
     validate_issue_key,
     validate_labels,
 )
@@ -329,23 +330,39 @@ def list_task_comments(issue_key: str) -> list[dict]:
 
 
 @mcp.tool()
-def add_comment(issue_key: str, body: str, mention_me: bool = False, confirm: bool = False) -> dict:
+def add_comment(
+    issue_key: str,
+    body: str,
+    mention_me: bool = False,
+    mention: list[str] | None = None,
+    confirm: bool = False,
+) -> dict:
     """Añade un comentario a un issue de Jira. El texto va en markdown
     (títulos, listas, negrita, código, enlaces...) y se convierte al
     formato de Jira; las tablas no se soportan y salen como texto.
     Con mention_me=True, el comentario empieza con una mención (@) al
     usuario del gateway, para que le llegue la notificación.
+    Con `mention` (ej. ['jorge']), el comentario empieza mencionando a esas
+    personas. Solo acepta alias definidos en JIRA_MENTION_USERS del .env,
+    nunca un accountId libre: con un alias desconocido falla y dice cuáles
+    hay.
 
     IMPORTANTE: llama primero SIN `confirm` (o con confirm=False). Eso no
     envía nada, solo devuelve una vista previa del comentario — muéstrasela
     al usuario tal cual. Solo si el usuario la aprueba, vuelve a llamar con
     confirm=True y los mismos datos para publicarlo de verdad."""
+    try:
+        resolve_mentions(mention, _cfg)
+    except JiraError as e:
+        return {"error": str(e)}
+
     if not confirm:
         return {
             "preview": True,
             "issue_key": issue_key,
             "body": body,
             "mention_me": mention_me,
+            "mention": mention or [],
             "note": (
                 "Nada se ha enviado a Jira todavía. Revisa este preview con "
                 "el usuario y, si lo aprueba, llama de nuevo con confirm=True "
@@ -354,7 +371,7 @@ def add_comment(issue_key: str, body: str, mention_me: bool = False, confirm: bo
         }
 
     try:
-        result = _jira.add_comment(issue_key, body, mention_me=mention_me)
+        result = _jira.add_comment(issue_key, body, mention_me=mention_me, mention=mention)
     except JiraError as e:
         return {"error": str(e)}
 

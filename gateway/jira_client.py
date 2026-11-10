@@ -167,17 +167,34 @@ def _compact_attachment(a: dict) -> dict:
     }
 
 
-def _prepend_mention(doc: dict, account_id: str) -> None:
-    """Pone una mención a `account_id` al principio del documento: dentro
+def resolve_mentions(aliases: list[str] | None, cfg: Config) -> list[str]:
+    """Traduce alias de JIRA_MENTION_USERS a accountId, en el mismo orden y
+    sin repetir. Un alias desconocido falla sin llamar a Jira."""
+    if not aliases:
+        return []
+    known = cfg.jira_mention_users
+    unknown = [a for a in aliases if a.strip().lower() not in known]
+    if unknown:
+        available = ", ".join(sorted(known)) or "ninguno (falta JIRA_MENTION_USERS en el .env)"
+        raise JiraError(f"no sé a quién mencionar con {unknown}. Alias disponibles: {available}")
+    return list(dict.fromkeys(known[a.strip().lower()] for a in aliases))
+
+
+def _prepend_mentions(doc: dict, account_ids: list[str]) -> None:
+    """Pone menciones a `account_ids` al principio del documento: dentro
     del primer párrafo si el comentario empieza por uno, o en un párrafo
     propio si empieza por otra cosa (título, lista, código...)."""
-    mention = {"type": "mention", "attrs": {"id": account_id}}
+    inline: list[dict] = []
+    for account_id in account_ids:
+        if inline:
+            inline.append({"type": "text", "text": " "})
+        inline.append({"type": "mention", "attrs": {"id": account_id}})
     blocks = doc["content"]
     if blocks and blocks[0]["type"] == "paragraph":
         rest = blocks[0].get("content") or []
-        blocks[0]["content"] = [mention, {"type": "text", "text": " "}, *rest] if rest else [mention]
+        blocks[0]["content"] = [*inline, {"type": "text", "text": " "}, *rest] if rest else inline
     else:
-        blocks.insert(0, {"type": "paragraph", "content": [mention]})
+        blocks.insert(0, {"type": "paragraph", "content": inline})
 
 
 class JiraClient:
@@ -460,15 +477,24 @@ class JiraClient:
             for c in comments
         ]
 
-    def add_comment(self, issue_key: str, body: str, mention_me: bool = False) -> dict:
+    def add_comment(
+        self,
+        issue_key: str,
+        body: str,
+        mention_me: bool = False,
+        mention: list[str] | None = None,
+    ) -> dict:
         """Añade un comentario. Requiere que el llamante ya haya confirmado —
         esta función no pregunta nada, solo ejecuta. Con `mention_me`, el
-        comentario empieza mencionando al usuario del gateway."""
+        comentario empieza mencionando al usuario del gateway; con
+        `mention`, a las personas de esos alias de JIRA_MENTION_USERS."""
         validate_issue_key(issue_key, self.cfg.project_key)
+        others = resolve_mentions(mention, self.cfg)
 
         adf = markdown_to_adf(body)
-        if mention_me:
-            _prepend_mention(adf, self._current_account_id())
+        account_ids = ([self._current_account_id()] if mention_me else []) + others
+        if account_ids:
+            _prepend_mentions(adf, list(dict.fromkeys(account_ids)))
 
         resp = requests.post(
             f"{self.cfg.jira_api_base}/rest/api/3/issue/{issue_key}/comment",

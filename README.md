@@ -51,12 +51,20 @@ JIRA_SELECTED_STATUS=Selected for Development  # opcional, estado al que pasa cr
 JIRA_DEFAULT_ISSUE_TYPE=Task  # opcional, ajusta al nombre real de tu tipo de issue
 JIRA_SUBTASK_ISSUE_TYPE=Subtask  # opcional, tipo usado al crear con parent_key sin issue_type explícito
 JIRA_ALLOWED_STATUSES=Listo para validar  # opcional, allowlist de estados destino (separados por comas); vacío = cualquiera
+JIRA_MENTION_USERS=jorge=557058:aaaa-...,ana=557058:bbbb-...  # opcional, a quién puede mencionar add_comment (alias=accountId)
 ```
 
 `JIRA_ALLOWED_STATUSES` limita a qué estados pueden mover una tarea
 `start_task` y `transition_task`. Los estados de `JIRA_IN_PROGRESS_STATUS`
 y `JIRA_SELECTED_STATUS` se permiten siempre. Si no la defines, se permite
 cualquier transición del workflow, como hasta ahora.
+
+`JIRA_MENTION_USERS` es la lista cerrada de personas que `add_comment`
+puede mencionar con `mention` (ej. `mention=["jorge"]`). El agente usa el
+alias, nunca un accountId libre: así no puede notificar a cualquiera del
+Jira por error. El accountId de una persona sale de la URL de su perfil
+en Jira (`https://tudominio.atlassian.net/jira/people/<accountId>`). Sin
+la variable, `mention` falla y `mention_me` sigue funcionando igual.
 
 ### Adjuntos (opcional)
 
@@ -490,7 +498,10 @@ falta ir a adivinarlo desde un 403 pelado.
    agente te enseña el preview del texto → si dices que sí, vuelve a llamar
    con `confirm=True` para publicarlo. Con `mention_me=True` el comentario
    empieza con una mención (@) a ti, el usuario del gateway, para que te
-   llegue la notificación de Jira.
+   llegue la notificación de Jira. "Comenta en la PROJ-123 y avisa a
+   Jorge" → `mention=["jorge"]`: menciona a las personas de
+   `JIRA_MENTION_USERS` por su alias; un alias desconocido falla ya en el
+   preview y dice cuáles hay.
 10. "Apunta 1h 30m en la PROJ-123 de ayer" → `add_worklog` con
    `time_spent="1h 30m"` y `started="YYYY-MM-DD"` (sin `confirm`) → preview
    → `confirm=True`. Solo horas y minutos (`2h`, `45m`, `1h 30m`, `1.5h`),
